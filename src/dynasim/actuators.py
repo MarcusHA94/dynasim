@@ -3,6 +3,8 @@ import scipy
 import scipy.signal
 from math import pi
 
+
+
 class excitation():
 
     def generate(self, time):
@@ -34,6 +36,32 @@ class white_gaussian(excitation):
         ns = time.shape[0]
         np.random.seed(seed)
         return np.random.normal(self.u, self.f0*np.ones((ns)))
+    
+class banded_noise(excitation):
+
+    def __init__(self, bandwidth, amplitude):
+        self.bandwidth = bandwidth
+        self.amplitude = amplitude
+
+    def fftnoise(self, f):
+        f = np.array(f, dtype='complex')
+        Np = (len(f) - 1) // 2
+        phases = np.random.rand(Np) * 2 * np.pi
+        phases = np.cos(phases) + 1j * np.sin(phases)
+        f[1:Np+1] *= phases
+        f[-1:-1-Np:-1] = np.conj(f[1:Np+1])
+        return np.fft.ifft(f).real
+
+    def band_limited_noise(self, min_freq, max_freq, samples=1024, samplerate=1):
+        freqs = np.abs(np.fft.fftfreq(samples, 1/samplerate))
+        f = np.zeros(samples)
+        idx = np.where(np.logical_and(freqs>=min_freq, freqs<=max_freq))[0]
+        f[idx] = 1
+        return self.fftnoise(f)
+
+    def _generate(self, time, seed=43810):
+        np.random.seed(seed)
+        return self.amplitude * self.band_limited_noise(self.bandwidth[0], self.bandwidth[1], samples=len(time), samplerate=1/(time[1]-time[0]))
     
 class sine_sweep(excitation):
     '''
