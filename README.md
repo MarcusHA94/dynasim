@@ -101,6 +101,7 @@ dynasim.actuators.sinusoid(...)
 dynasim.actuators.white_gaussian(...)
 dynasim.actuators.sine_sweep(...)
 dynasim.actuators.rand_phase_ms(...)
+dynasim.actuators.banded_noise(...)
 ```
 
 ### Totally custom system
