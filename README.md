@@ -65,7 +65,7 @@ kn_vec = np.array([25.0 * (i%2) for i in range(n_dof)])
 # create nonlinearities
 system_nonlin = dynasim.nonlinearities.exponent_stiffness(kn_vec, exponent=3, dofs=n_dof)
 # instantiate system and embed nonlinearity
-system = dynasim.systems.cantilever(m_vec, c_vec, k_vec, dofs=n_dof, nonlinearity=system_nonlin)
+system = dynasim.systems.mdof_cantilever(m_vec, c_vec, k_vec, dofs=n_dof, nonlinearity=system_nonlin)
 
 # create excitations and embed to system
 system.excitations = [None] * n_dof
