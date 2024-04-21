@@ -49,9 +49,11 @@ import dynasim
 
 # create required variables
 n_dof = 5
+
+# create a time vector of 2048 time points up to 120 seconds
 nt = 2048
 time_span = np.linspace(0, 120, nt)
-# time vector of 2048 time points up to 120 seconds
+
 
 # create vectors of system parameters for sequential MDOF
 m_vec = 10.0 * np.ones(n_dof)
