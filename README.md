@@ -10,7 +10,7 @@ The dynasim package simulates dynamic systems in the form:
 ```math
 \mathbf{M}\ddot{\mathbf{x}} + \mathbf{C}\dot{\mathbf{x}} + \mathbf{K}\mathbf{x} + \mathbf{C}_n g_c(\mathbf{x}, \dot{\mathbf{x}}) + \mathbf{K}_n g_k(\mathbf{x}, \dot{\mathbf{x}}) = \mathbf{f}
 ```
-where $\mathbf{\Xi}_n g_{\bullet}(\mathbf{x},\dot{\mathbf{x}})$ represents the nonlinear system forces. For example, a 3DOF Duffing oscillator, connected at one end, would have representative nonlinear forces,
+where \(\mathbf{\Xi}_n g_{\bullet}(\mathbf{x},\dot{\mathbf{x}})\) represents the nonlinear system forces. For example, a 3DOF Duffing oscillator, connected at one end, would have representative nonlinear forces,
 ```math
 \mathbf{K}_n g_n(\mathbf{x}) = \begin{bmatrix}
     k_{n,1} & - k_{n,2} & 0 \\
