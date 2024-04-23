@@ -10,7 +10,7 @@ The dynasim package simulates dynamic systems in the form:
 ```math
 \mathbf{M}\ddot{\mathbf{x}} + \mathbf{C}\dot{\mathbf{x}} + \mathbf{K}\mathbf{x} + \mathbf{C}_n g_c(\mathbf{x}, \dot{\mathbf{x}}) + \mathbf{K}_n g_k(\mathbf{x}, \dot{\mathbf{x}}) = \mathbf{f}
 ```
-where $\mathbf{\Xi}_n g_{\bullet}(\mathbf{x},\dot{\mathbf{x}})$ represents the nonlinear system forces. For example, a 3DOF Duffing oscillator, connected at one end, would have representative nonlinear forces,
+where \(\mathbf{\Xi}_n g_{\bullet}(\mathbf{x},\dot{\mathbf{x}})\) represents the nonlinear system forces. For example, a 3DOF Duffing oscillator, connected at one end, would have representative nonlinear forces,
 ```math
 \mathbf{K}_n g_n(\mathbf{x}) = \begin{bmatrix}
     k_{n,1} & - k_{n,2} & 0 \\
@@ -49,9 +49,11 @@ import dynasim
 
 # create required variables
 n_dof = 5
+
+# create a time vector of 2048 time points up to 120 seconds
 nt = 2048
 time_span = np.linspace(0, 120, nt)
-# time vector of 2048 time points up to 120 seconds
+
 
 # create vectors of system parameters for sequential MDOF
 m_vec = 10.0 * np.ones(n_dof)
@@ -63,7 +65,7 @@ kn_vec = np.array([25.0 * (i%2) for i in range(n_dof)])
 # create nonlinearities
 system_nonlin = dynasim.nonlinearities.exponent_stiffness(kn_vec, exponent=3, dofs=n_dof)
 # instantiate system and embed nonlinearity
-system = dynasim.systems.cantilever(m_vec, c_vec, k_vec, dofs=n_dof, nonlinearity=system_nonlin)
+system = dynasim.systems.mdof_cantilever(m_vec, c_vec, k_vec, dofs=n_dof, nonlinearity=system_nonlin)
 
 # create excitations and embed to system
 system.excitations = [None] * n_dof
