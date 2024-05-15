@@ -97,9 +97,9 @@ class rand_phase_ms(excitation):
 
         return (F_mat @ self.Sx).reshape(-1)
 
-class shaker():
+class mdof_shaker():
     '''
-    Shaker class generates force signals at each DOF using excitation class
+    MDOF shaker class generates force signals at each DOF using excitation class
     '''
 
     def __init__(self, excitations=None, seed=43810):
@@ -114,12 +114,37 @@ class shaker():
         for n, excite in enumerate(self.excitations):
             match excite:
                 case excitation():
-                    self.f[n,:] = self.excitations[n]._generate(time, self.seed+n)
+                    self.f[n, :] = self.excitations[n]._generate(time, self.seed+n)
                 case np.ndarray():
-                    self.f[n,:] = self.excitations[n]
+                    self.f[n, :] = self.excitations[n]
                 case None:
-                    self.f[n,:] = np.zeros(nt)
+                    self.f[n, :] = np.zeros(nt)
 
+        return self.f
+    
+class point_shakers():
+    '''
+    Point shakers class generates force signals at a specific locations using excitation class
+    '''
+
+    def __init__(self, excitations=None, xx=None, seed=43810):
+
+        self.excitations = excitations
+        "excitations is a list of dictionaries containing location and excitation"
+        self.xx = xx
+        self.seed = seed
+
+    def generate(self, time):
+        nt = time.shape[0]
+        nx = self.xx.shape[0]
+        self.f = np.zeros((nx, nt))
+        for excite in self.excitations:
+            self.loc_id = np.argmin(np.abs(self.xx-excite['loc']))
+            match excite['excitation']:
+                case excitation():
+                    self.f[self.loc_id, :] = excite['excitation']._generate(time, self.seed)
+                case np.ndarray():
+                    self.f[self.loc_id, :] = self.excitation
         return self.f
         
 

@@ -1,6 +1,9 @@
 import numpy as np
 from math import pi
 from dynasim.base import mdof_system, cont_ss_system
+from dynasim.actuators import point_shakers
+from dynasim.simulators import rk4
+import warnings
 import scipy.integrate as integrate
 
 class cont_beam(cont_ss_system):
@@ -17,7 +20,7 @@ class cont_beam(cont_ss_system):
                 self.E = kwargs["E"]
                 self.rho = kwargs["rho"]
                 self.I = kwargs["I"]
-                if type(kwargs["area"]) == list or type(kwargs["area"]) == tuple:
+                if isinstance(kwargs["area"], list) or isinstance(kwargs["area"], tuple):
                     self.b = kwargs["area"][0]
                     self.h = kwargs["area"][1]
                     self. A = np.product(kwargs["area"])
@@ -73,35 +76,72 @@ class cont_beam(cont_ss_system):
                 beta_n = beta_l / self.L
                 self.wn = (beta_l**2) * wn_mult
                 self.phi_n = np.zeros((self.nx, n_modes))
+                self.phi_dx2_n = np.zeros((self.nx, n_modes))
+                self.phi_dx4_n = np.zeros((self.nx, n_modes))
                 for n in range(n_modes):
                     self.phi_n[:,n] =  (np.cos(beta_n[n]*x) - np.cosh(beta_n[n]*x)) - \
                                     (np.cos(beta_l[n]) - np.cosh(beta_l[n]))/(np.sin(beta_l[n]) - np.sinh(beta_l[n])) * \
                                     (np.sin(beta_n[n]*x) - np.sinh(beta_n[n]*x))
+                    self.phi_dx2_n[:,n] =  beta_n[n]**2 * (-np.cos(beta_n[n]*x) - np.cosh(beta_n[n]*x)) - \
+                                    (np.cos(beta_l[n]) + np.cosh(beta_l[n]))/(np.sin(beta_l[n]) + np.sinh(beta_l[n])) * \
+                                    beta_n[n]**2 * (-np.sin(beta_n[n]*x) - np.sinh(beta_n[n]*x))
+                    self.phi_dx4_n[:,n] = beta_n[n]**4 * (np.cos(beta_n[n]*x) - np.cosh(beta_n[n]*x)) - \
+                                    (np.cos(beta_l[n]) + np.cosh(beta_l[n]))/(np.sin(beta_l[n]) + np.sinh(beta_l[n])) * \
+                                    beta_n[n]**4 * (np.sin(beta_n[n]*x) - np.sinh(beta_n[n]*x))
             case "fr-fr":
                 self.bc_type_long = "free - free"
                 beta_l = (2*nn + 1) * pi / 2
                 beta_n = beta_l / self.L
                 self.wn = (beta_l**2) * wn_mult
                 self.phi_n = np.zeros((self.nx, n_modes))
+                self.phi_dx2_n = np.zeros((self.nx, n_modes))
+                self.phi_dx4_n = np.zeros((self.nx, n_modes))
                 for n in range(n_modes):
                     self.phi_n[:,n] =  (np.cos(beta_n[n]*x) + np.cosh(beta_n[n]*x)) - \
                                     (np.cos(beta_l[n]) - np.cosh(beta_l[n]))/(np.sin(beta_l[n]) - np.sinh(beta_l[n])) * \
                                     (np.sin(beta_n[n]*x) + np.sinh(beta_n[n]*x))
+                    self.phi_dx2_n[:,n] =  beta_n[n]**2 * (-np.cos(beta_n[n]*x) + np.cosh(beta_n[n]*x)) - \
+                                    (np.cos(beta_l[n]) + np.cosh(beta_l[n]))/(np.sin(beta_l[n]) + np.sinh(beta_l[n])) * \
+                                    beta_n[n]**2 * (-np.sin(beta_n[n]*x) + np.sinh(beta_n[n]*x))
+                    self.phi_dx4_n[:,n] = beta_n[n]**4 * (np.cos(beta_n[n]*x) + np.cosh(beta_n[n]*x)) - \
+                                    (np.cos(beta_l[n]) + np.cosh(beta_l[n]))/(np.sin(beta_l[n]) + np.sinh(beta_l[n])) * \
+                                    beta_n[n]**4 * (np.sin(beta_n[n]*x) + np.sinh(beta_n[n]*x))
             case "fx-ss":
                 self.bc_type_long = "fixed - simply supported"
                 beta_l = (4*nn + 1) * pi / 4
                 beta_n = beta_l / self.L
                 self.wn = (beta_l**2) * wn_mult
+                self.phi_n = np.zeros((self.nx, n_modes))
+                self.phi_dx2_n = np.zeros((self.nx, n_modes))
+                self.phi_dx4_n = np.zeros((self.nx, n_modes))
+                for n in range(n_modes):
+                    self.phi_n[:,n] =  (np.cos(beta_n[n]*x) - np.cosh(beta_n[n]*x)) - \
+                                    (np.cos(beta_l[n]) - np.cosh(beta_l[n]))/(np.sin(beta_l[n]) - np.sinh(beta_l[n])) * \
+                                    (np.sin(beta_n[n]*x) - np.sinh(beta_n[n]*x))
+                    self.phi_dx2_n[:,n] =  beta_n[n]**2 * (-np.cos(beta_n[n]*x) - np.cosh(beta_n[n]*x)) - \
+                                    (np.cos(beta_l[n]) + np.cosh(beta_l[n]))/(np.sin(beta_l[n]) + np.sinh(beta_l[n])) * \
+                                    beta_n[n]**2 * (-np.sin(beta_n[n]*x) - np.sinh(beta_n[n]*x))
+                    self.phi_dx4_n[:,n] = beta_n[n]**4 * (np.cos(beta_n[n]*x) - np.cosh(beta_n[n]*x)) - \
+                                    (np.cos(beta_l[n]) + np.cosh(beta_l[n]))/(np.sin(beta_l[n]) + np.sinh(beta_l[n])) * \
+                                    beta_n[n]**4 * (np.sin(beta_n[n]*x) - np.sinh(beta_n[n]*x))
             case "fx-fr":
                 self.bc_type_long = "fixed - free"
                 beta_l = (2*nn - 1) * pi / 2
                 beta_n = beta_l / self.L
                 self.wn = (beta_l**2) * wn_mult
                 self.phi_n = np.zeros((self.nx, n_modes))
+                self.phi_dx2_n = np.zeros((self.nx, n_modes))
+                self.phi_dx4_n = np.zeros((self.nx, n_modes))
                 for n in range(n_modes):
                     self.phi_n[:,n] =  (np.cos(beta_n[n]*x) - np.cosh(beta_n[n]*x)) - \
                                     (np.cos(beta_l[n]) + np.cosh(beta_l[n]))/(np.sin(beta_l[n]) + np.sinh(beta_l[n])) * \
                                     (np.sin(beta_n[n]*x) - np.sinh(beta_n[n]*x))
+                    self.phi_dx2_n[:,n] =  beta_n[n]**2 * (-np.cos(beta_n[n]*x) - np.cosh(beta_n[n]*x)) - \
+                                    (np.cos(beta_l[n]) + np.cosh(beta_l[n]))/(np.sin(beta_l[n]) + np.sinh(beta_l[n])) * \
+                                    beta_n[n]**2 * (-np.sin(beta_n[n]*x) - np.sinh(beta_n[n]*x))
+                    self.phi_dx4_n[:,n] = beta_n[n]**4 * (np.cos(beta_n[n]*x) - np.cosh(beta_n[n]*x)) - \
+                                    (np.cos(beta_l[n]) + np.cosh(beta_l[n]))/(np.sin(beta_l[n]) + np.sinh(beta_l[n])) * \
+                                    beta_n[n]**4 * (np.sin(beta_n[n]*x) - np.sinh(beta_n[n]*x))
                     
         M = np.zeros((self.n_modes,self.n_modes))
         K = np.zeros((self.n_modes,self.n_modes))
@@ -118,6 +158,58 @@ class cont_beam(cont_ss_system):
         self.gen_state_matrices()
 
         return self.xx, self.phi_n
+    
+    def simulate(self, tt, z0=None, simulator=None):
+        '''
+        Simulate the system for a given time using the specified simulator.
+
+        Args:
+            tt: The vector of time samples
+            z0: The initial state of the system. Defaults to None.
+            simulator: The simulator to use for the simulation. Defaults to scipy.solve_ivp.
+
+        Returns:
+            A dictionary containing the system's response displacement and velocity over time.
+        '''
+
+        # instantiate time
+        self.t = tt
+
+        if hasattr(self, 'excitations'):
+            if self.excitations is not None:
+                # create shaker object
+                self.shaker = point_shakers(self.excitations, self.xx)
+                # generate forcing series
+                # self.f = self.shaker.generate(tt)
+                ff = self.shaker.generate(tt)
+                pp = np.zeros((self.n_modes, tt.shape[0]))
+                for n in range(self.n_modes):
+                    pp[n,:] = integrate.simpson(self.phi_n[:,n].reshape(-1,1) * ff, self.xx, axis=0).reshape(-1)
+                self.f = pp
+            else:
+                self.f = None
+        else:
+            self.f = None
+
+        # initiate simulator
+        if simulator is None:
+            # self.simulator = scipy_ivp(self)
+            self.simulator = rk4(self)
+        else:
+            self.simulator = simulator(self)
+
+        # initial conditions
+        if z0 is None:
+            # warnings.warn('No initial conditions provided, proceeding with zero initial state', UserWarning)
+            tau0 = np.zeros((2*self.dofs))
+            if all([e is None for e in self.excitations]):
+                warnings.warn('Zero initial condition and zero excitations, what do you want??', UserWarning)
+        else:
+            tau0 = z0
+        
+        # simulate
+        qq = self.simulator.sim(tt, tau0)
+        return qq
 
 
 class mdof_symmetric(mdof_system):
