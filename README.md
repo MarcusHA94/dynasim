@@ -10,7 +10,7 @@ The dynasim package simulates dynamic systems in the form:
 ```math
 \mathbf{M}\ddot{\mathbf{x}} + \mathbf{C}\dot{\mathbf{x}} + \mathbf{K}\mathbf{x} + \mathbf{C}_n g_c(\mathbf{x}, \dot{\mathbf{x}}) + \mathbf{K}_n g_k(\mathbf{x}, \dot{\mathbf{x}}) = \mathbf{f}
 ```
-where \(\mathbf{\Xi}_n g_{\bullet}(\mathbf{x},\dot{\mathbf{x}})\) represents the nonlinear system forces. For example, a 3DOF Duffing oscillator, connected at one end, would have representative nonlinear forces,
+where $\mathbf{\Xi}_n g_{\bullet}(\mathbf{x},\dot{\mathbf{x}}) = \mathbf{C}_n g_c(\mathbf{x}, \dot{\mathbf{x}}) + \mathbf{K}_n g_k(\mathbf{x}, \dot{\mathbf{x}})$ represents the nonlinear system forces. For example, a 3DOF Duffing oscillator, connected at one end, would have representative nonlinear forces,
 ```math
 \mathbf{K}_n g_n(\mathbf{x}) = \begin{bmatrix}
     k_{n,1} & - k_{n,2} & 0 \\
@@ -26,7 +26,7 @@ where \(\mathbf{\Xi}_n g_{\bullet}(\mathbf{x},\dot{\mathbf{x}})\) represents the
 
 ## Installing DynaSim
 
-To install SynaSim, follow these steps:
+To install DynaSim, follow these steps:
 
 Linux and macOS:
 ```
@@ -53,7 +53,6 @@ n_dof = 5
 # create a time vector of 2048 time points up to 120 seconds
 nt = 2048
 time_span = np.linspace(0, 120, nt)
-
 
 # create vectors of system parameters for sequential MDOF
 m_vec = 10.0 * np.ones(n_dof)
@@ -111,6 +110,49 @@ dynasim.actuators.banded_noise(...)
 One can generate a custom system by instantiating an MDOF system with corresponding modal matrices, but the nonlinearity must also be instantiated and 
 ```
 dynasim.base.mdof_system(M, C, K, Cn, Kn)
+```
+
+## Continuous Beams
+
+These work much like the MDOF systems but with a few tweaks. Where ```beam_kwargs_cmb``` is a dictionary of combined properties of the beam.
+```
+beam_kwargs_cmb = {
+    "EI" : EI,  # Young's Modulus multiplied by second moment of intertia
+    "pA" : pA,  # density multiplied by cross sectional area
+    "c" : c,  # damping
+    "l" : l  # length of beam
+}
+ss_beam = dynasim.systems.cont_beam("cmb_vars", **beam_kwargs_cmb)
+```
+
+One can then generate and retrieve the mode shapes of the beam via
+```
+xx, phis = ss_beam.gen_modes(support, n_modes, nx)
+```
+Where ```support``` is a string representing different support types for the beam, options available are:
+| Code | Description |
+|------|-------------|
+| `ss-ss` | Simply supported at both ends |
+| `fx-fx` | Fixed at both ends |
+| `fr-fr` | Free at both ends |
+| `fx-ss` | Fixed at one end and simply supported at the other |
+| `fx-fr` | Fixed at one end and free at the other |
+
+Then, excitations are added as a list of dictionaries containing the location (in m) and excitation (prescribed as with mdof systems)
+```
+ss_beam.excitations = [
+    {
+        "excitation" : dynasim.actuators.sinusoid(1.2, 1.0),
+        "loc" : 0.25
+    }
+]
+```
+Then simulate just as with the MDOF system, however, the returned data here is the modal coordinates, and so to retrieve displacement, simply multiply by, and sum through, the mode shapes.
+```
+data = ss_beam.simulate(tt, z0 = tau0)
+
+ww = np.sum(np.matmul(data['x'][:,:,np.newaxis], phis.T[:,np.newaxis,:]), axis=0)
+wwd = np.sum(np.matmul(data['xdot'][:,:,np.newaxis], phis.T[:,np.newaxis,:]), axis=0)
 ```
 
 ## Contact
