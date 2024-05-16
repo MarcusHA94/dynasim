@@ -1,9 +1,6 @@
 import numpy as np
 from math import pi
 from dynasim.base import mdof_system, cont_ss_system
-from dynasim.actuators import point_shakers
-from dynasim.simulators import rk4
-import warnings
 import scipy.integrate as integrate
 
 class cont_beam(cont_ss_system):
@@ -158,58 +155,6 @@ class cont_beam(cont_ss_system):
         self.gen_state_matrices()
 
         return self.xx, self.phi_n
-    
-    def simulate(self, tt, z0=None, simulator=None):
-        '''
-        Simulate the system for a given time using the specified simulator.
-
-        Args:
-            tt: The vector of time samples
-            z0: The initial state of the system. Defaults to None.
-            simulator: The simulator to use for the simulation. Defaults to scipy.solve_ivp.
-
-        Returns:
-            A dictionary containing the system's response displacement and velocity over time.
-        '''
-
-        # instantiate time
-        self.t = tt
-
-        if hasattr(self, 'excitations'):
-            if self.excitations is not None:
-                # create shaker object
-                self.shaker = point_shakers(self.excitations, self.xx)
-                # generate forcing series
-                # self.f = self.shaker.generate(tt)
-                ff = self.shaker.generate(tt)
-                pp = np.zeros((self.n_modes, tt.shape[0]))
-                for n in range(self.n_modes):
-                    pp[n,:] = integrate.simpson(self.phi_n[:,n].reshape(-1,1) * ff, self.xx, axis=0).reshape(-1)
-                self.f = pp
-            else:
-                self.f = None
-        else:
-            self.f = None
-
-        # initiate simulator
-        if simulator is None:
-            # self.simulator = scipy_ivp(self)
-            self.simulator = rk4(self)
-        else:
-            self.simulator = simulator(self)
-
-        # initial conditions
-        if z0 is None:
-            # warnings.warn('No initial conditions provided, proceeding with zero initial state', UserWarning)
-            tau0 = np.zeros((2*self.dofs))
-            if all([e is None for e in self.excitations]):
-                warnings.warn('Zero initial condition and zero excitations, what do you want??', UserWarning)
-        else:
-            tau0 = z0
-        
-        # simulate
-        qq = self.simulator.sim(tt, tau0)
-        return qq
 
 
 class mdof_symmetric(mdof_system):

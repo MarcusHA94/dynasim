@@ -1,6 +1,7 @@
 import numpy as np
 from dynasim.simulators import *
 from dynasim.actuators import mdof_shaker, point_shakers
+import scipy.integrate as integrate
 import warnings
 
 class state_space_system:
@@ -60,7 +61,7 @@ class cont_ss_system(state_space_system):
         self.dofs = modes
 
         self.gen_state_matrices
-
+    
     def simulate(self, tt, z0=None, simulator=None):
         '''
         Simulate the system for a given time using the specified simulator.
@@ -82,8 +83,12 @@ class cont_ss_system(state_space_system):
                 # create shaker object
                 self.shaker = point_shakers(self.excitations, self.xx)
                 # generate forcing series
-                self.f = self.shaker.generate(tt)
+                # self.f = self.shaker.generate(tt)
                 ff = self.shaker.generate(tt)
+                pp = np.zeros((self.n_modes, tt.shape[0]))
+                for n in range(self.n_modes):
+                    pp[n,:] = integrate.simpson(self.phi_n[:,n].reshape(-1,1) * ff, self.xx, axis=0).reshape(-1)
+                self.f = pp
             else:
                 self.f = None
         else:
@@ -106,7 +111,8 @@ class cont_ss_system(state_space_system):
             tau0 = z0
         
         # simulate
-        return self.simulator.sim(tt, tau0)
+        qq = self.simulator.sim(tt, tau0)
+        return qq
 
 class mdof_system(state_space_system):
     '''
