@@ -219,18 +219,23 @@ class mdof_cantilever(mdof_system):
         K = np.diag(np.concatenate((k_[:-1]+k_[1:],np.array([k_[-1]])),axis=0)) + np.diag(-k_[1:],k=1) + np.diag(-k_[1:],k=-1)
 
         if nonlinearity is not None:
-            self.nonlin_transform = lambda z : np.concatenate((
-                nonlinearity.gk_func(
-                    z[:dofs] - np.concatenate((np.zeros_like(z[:1]),z[:dofs-1])),
-                    z[dofs:] - np.concatenate((np.zeros_like(z[:1]),z[dofs:-1]))),
-                nonlinearity.gc_func(
-                    z[dofs:] - np.concatenate((np.zeros_like(z[:1]),z[dofs:-1])),
-                    z[:dofs] - np.concatenate((np.zeros_like(z[:1]),z[:dofs-1])))
-            ))
-            
             Cn = nonlinearity.Cn
             Kn = nonlinearity.Kn
             super().__init__(M, C, K, Cn, Kn)
         else:
             super().__init__(M, C, K)
-            self.nonlin_transform = lambda z : np.zeros_like(z)
+    
+    def nonlin_transform(self, z):
+
+        if self.nonlinearity is not None:
+
+            x_ = z[:self.dofs] - np.concatenate((np.zeros_like(z[:1]), z[:self.dofs-1]))
+            x_dot = z[self.dofs:] - np.concatenate((np.zeros_like(z[:1]), z[self.dofs:-1]))
+
+            return np.concatenate((
+                self.nonlinearity.gk_func(x_, x_dot),
+                self.nonlinearity.gc_func(x_, x_dot)
+            ))
+        
+        else:
+            return np.zeros_like(z)
