@@ -82,6 +82,7 @@ class rk4(simulator):
         
         return {
             'x' : np.array(z[:self.system.dofs,:]),
-            'xdot' : np.array(z[self.system.dofs:,:])
+            'xdot' : np.array(z[self.system.dofs:,:]),
+            'z' : np.array(z)
         }
     
