@@ -239,3 +239,102 @@ class mdof_cantilever(mdof_system):
         
         else:
             return np.zeros_like(z)
+        
+
+class bid_mdof_walled(mdof_system):
+    '''
+    Generic bidirection MDOF system with walls
+    '''
+    
+    def __init__(self, mm, cc_h, cc_v, kk_h, kk_v, shape=None):
+        
+        if type(mm) is np.ndarray:
+            dofs = 2 * mm.size
+        elif dofs is not None:
+            dofs = 2 * shape[0] * shape[1]
+            mm = mm * np.ones(shape)
+            cc_h = cc_h * np.ones(shape)
+            cc_v = cc_v * np.ones(shape)
+            kk_h = kk_h * np.ones(shape)
+            kk_v = kk_v * np.ones(shape)
+        else:
+            raise Exception('Under defined system, please provide either parameter matrices or number of degrees of freedom and shape')
+        
+        self.mm_ = mm
+        self.cc_h = cc_h
+        self.cc_v = cc_v
+        self.kk_h = kk_h
+        self.kk_v = kk_v
+        
+        M = np.diag(mm.reshape(-1).repeat(2))
+        C = self.construct_modal_matrix(cc_h, cc_v)
+        K = self.construct_modal_matrix(kk_h, kk_v)
+        
+        self.nonlinearity = None
+        
+        super().__init__(M, C, K)
+    
+    
+    def nonlin_transform(self, z):
+
+        if self.nonlinearity is not None:
+
+            x_ = z[:self.dofs] - np.concatenate((np.zeros_like(z[:1]), z[:self.dofs-1]))
+            x_dot = z[self.dofs:] - np.concatenate((np.zeros_like(z[:1]), z[self.dofs:-1]))
+
+            return np.concatenate((
+                self.nonlinearity.gk_func(x_, x_dot),
+                self.nonlinearity.gc_func(x_, x_dot)
+            ))
+        
+        else:
+            return np.zeros_like(z)
+    
+    def stack_connection_x(self, ck_dir):
+        
+        m, n = ck_dir.shape
+        CK_dir = np.zeros((m * n, m * n))
+        for i in range(m):
+            ck_i = ck_dir[i, :]
+            CK_i = np.diag(np.concatenate((ck_i[:-1]+ck_i[1:],np.array([ck_i[-1]])),axis=0)) + np.diag(-ck_i[1:],k=1) + np.diag(-ck_i[1:],k=-1)
+            CK_dir[i*n:(i+1)*n, i*n:(i+1)*n] = CK_i
+        return CK_dir
+    
+    def stack_connection_y(self, ck_dir):
+        
+        m, n = ck_dir.shape
+        CK_dir = np.zeros((m * n, m * n))
+        
+        off_diag_vec = -np.concatenate([ck_dir[i, :] for i in range(1,m)])
+        CK_dir = CK_dir + np.diag(off_diag_vec, k=n)
+        CK_dir = CK_dir + np.diag(off_diag_vec, k=-n)
+        
+        diag_vec = np.concatenate([ck_dir[i, :] + ck_dir[i+1, :] for i in range(m-1)] + [ck_dir[-1, :]])
+        
+        CK_dir = CK_dir + np.diag(diag_vec)
+        
+        return CK_dir
+        
+    def construct_modal_matrix(self, ck_h, ck_v):
+        '''
+        Construct the modal matrix for the system
+        '''
+        # Get dimensions of ck_h and ck_v (assuming both are m x n and the same size)
+        m, n = ck_h.shape
+        
+        # Initialize a (2 * m) x (2 * n) zero matrix for CK
+        CK = np.zeros((2 * m * n, 2 * m * n))
+
+        def index(i, j, direction):
+            # Helper function to calculate the position in the stiffness matrix
+            # direction = 0 for x, 1 for y
+            return 2 * (i * n + j) + direction
+        
+        CK_x = self.stack_connection_x(ck_h)
+        CK_y = self.stack_connection_y(ck_v)
+        
+        CK[::2, ::2] = CK_x
+        CK[1::2, 1::2] = CK_y
+
+        return CK
+        

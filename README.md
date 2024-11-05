@@ -92,6 +92,7 @@ There are a currently two system types available for MDOF systems, which are ins
 ```
 dynasim.systems.mdof_symmetric(m_, c_, k_, dofs, nonlinearity)
 dynasim.systems.mdof_cantilever(m_, c_, k_, dofs, nonlinearity)
+dynasim.systems.bid_mdof_walled(m_vec, ch_mat, cv_mat, kh_mat, kv_mat)
 ```
 
 ### Actuator classes
