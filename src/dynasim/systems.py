@@ -267,13 +267,12 @@ class bid_mdof_walled(mdof_system):
         self.kk_v = kk_v
         
         M = np.diag(mm.reshape(-1).repeat(2))
-        C = self.construct_modal_matrix(cc_h, cc_v)
         K = self.construct_modal_matrix(kk_h, kk_v)
+        C = self.construct_modal_matrix(cc_h, cc_v)
         
         self.nonlinearity = None
         
         super().__init__(M, C, K)
-    
     
     def nonlin_transform(self, z):
 
@@ -289,31 +288,6 @@ class bid_mdof_walled(mdof_system):
         
         else:
             return np.zeros_like(z)
-    
-    def stack_connection_x(self, ck_dir):
-        
-        m, n = ck_dir.shape
-        CK_dir = np.zeros((m * n, m * n))
-        for i in range(m):
-            ck_i = ck_dir[i, :]
-            CK_i = np.diag(np.concatenate((ck_i[:-1]+ck_i[1:],np.array([ck_i[-1]])),axis=0)) + np.diag(-ck_i[1:],k=1) + np.diag(-ck_i[1:],k=-1)
-            CK_dir[i*n:(i+1)*n, i*n:(i+1)*n] = CK_i
-        return CK_dir
-    
-    def stack_connection_y(self, ck_dir):
-        
-        m, n = ck_dir.shape
-        CK_dir = np.zeros((m * n, m * n))
-        
-        off_diag_vec = -np.concatenate([ck_dir[i, :] for i in range(1,m)])
-        CK_dir = CK_dir + np.diag(off_diag_vec, k=n)
-        CK_dir = CK_dir + np.diag(off_diag_vec, k=-n)
-        
-        diag_vec = np.concatenate([ck_dir[i, :] + ck_dir[i+1, :] for i in range(m-1)] + [ck_dir[-1, :]])
-        
-        CK_dir = CK_dir + np.diag(diag_vec)
-        
-        return CK_dir
         
     def construct_modal_matrix(self, ck_h, ck_v):
         '''
@@ -322,19 +296,54 @@ class bid_mdof_walled(mdof_system):
         # Get dimensions of ck_h and ck_v (assuming both are m x n and the same size)
         m, n = ck_h.shape
         
+        num_dof = 2 * m * n
+        
         # Initialize a (2 * m) x (2 * n) zero matrix for CK
-        CK = np.zeros((2 * m * n, 2 * m * n))
-
+        CK = np.zeros((num_dof, num_dof))
+        
         def index(i, j, direction):
-            # Helper function to calculate the position in the stiffness matrix
-            # direction = 0 for x, 1 for y
-            return 2 * (i * n + j) + direction
+            return 2 * (i * n + j) + direction # 0 for horizontal, 1 for vertical
         
-        CK_x = self.stack_connection_x(ck_h)
-        CK_y = self.stack_connection_y(ck_v)
+        # populate the stiffness matrix
+        for i in range(m):
+            for j in range(n):
+                x_idx = index(i, j, 0)  # index for x^{i,j}
+                y_idx = index(i, j, 1)  # index for y^{i,j}
+                    
+                # contribution to left neighbour x^{i,j-1}
+                if j > 0:
+                    left_idx = index(i, j-1, 0)
+                    CK[left_idx, x_idx] -= ck_h[i, j]
+                    
+                # contribution to right neighbour x^{i,j+1}
+                if j < n-1:
+                    right_idx = index(i, j+1, 0)
+                    CK[right_idx, x_idx] -= ck_h[i, j]
+                    
+                # contribution to top neighbour y^{i-1,j}
+                if i > 0:
+                    top_idx = index(i-1, j, 1)
+                    CK[top_idx, y_idx] -= ck_v[i, j]
+                    
+                # contribution to bottom neighbour y^{i+1,j}
+                if i < m-1:
+                    bottom_idx = index(i+1, j, 1)
+                    CK[bottom_idx, y_idx] -= ck_v[i, j]
+                    
+                # contribution to self
+                CK[x_idx, x_idx] += ck_h[i, j]
+                CK[y_idx, y_idx] += ck_v[i, j]
+                if j < n-1:
+                    CK[x_idx, x_idx] += ck_h[i, j+1]
+                if i < m-1:
+                    CK[y_idx, y_idx] += ck_v[i+1, j]
         
-        CK[::2, ::2] = CK_x
-        CK[1::2, 1::2] = CK_y
+        # turn lower triangle into zeros
+        CK = np.triu(CK)
+        
+        # replace lower triangle with upper triangle
+        CK = CK + CK.T - np.diag(np.diag(CK))
+                
 
         return CK
         
