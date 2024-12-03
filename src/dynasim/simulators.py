@@ -26,7 +26,7 @@ class simulator():
                 t_id = np.argmin(np.abs(self.t-t))
                 return self.A@z + self.H@self.f[:,t_id]
             case [_,_]:
-                zn = self.nonlin_transform(z)
+                zn = self.nonlin_transform(z).squeeze()
                 t_id = np.argmin(np.abs(self.t-t))
                 return self.A@z + self.An@zn + self.H@self.f[:,t_id]
     

@@ -246,7 +246,7 @@ class bid_mdof_walled(mdof_system):
     Generic bidirection MDOF system with walls
     '''
     
-    def __init__(self, mm, cc_h, cc_v, kk_h, kk_v, shape=None):
+    def __init__(self, mm, cc_h, cc_v, kk_h, kk_v, shape=None, nonlinearity=None):
         
         if type(mm) is np.ndarray:
             dofs = 2 * mm.size
@@ -270,17 +270,50 @@ class bid_mdof_walled(mdof_system):
         K = self.construct_modal_matrix(kk_h, kk_v)
         C = self.construct_modal_matrix(cc_h, cc_v)
         
-        self.nonlinearity = None
+        self.shape = shape
         
-        super().__init__(M, C, K)
+        self.nonlinearity = nonlinearity
+        
+        if nonlinearity is not None:
+            Cn = nonlinearity.Cn
+            Kn = nonlinearity.Kn
+            super().__init__(M, C, K, Cn, Kn)
+        else:
+            super().__init__(M, C, K)
     
     def nonlin_transform(self, z):
 
         if self.nonlinearity is not None:
+            
+            m, n = self.shape
+            if len (z.shape) == 1:
+                z = z.reshape(-1, 1)
+            nt = z.shape[1]
+            
+            x_ = np.zeros_like(z[:self.dofs, :])
+            x_dot = np.zeros_like(z[self.dofs:, :])
+            
+            for t in range(nt):
+            
+                displacement = z[:self.dofs, t].reshape(m, n, 2)
+                result = []
 
-            x_ = z[:self.dofs] - np.concatenate((np.zeros_like(z[:1]), z[:self.dofs-1]))
-            x_dot = z[self.dofs:] - np.concatenate((np.zeros_like(z[:1]), z[self.dofs:-1]))
+                for i in range(m):
+                    for j in range(n):
+                        # x-displacement
+                        if j == 0:  # First column
+                            result.append(displacement[i, j, 0])
+                        else:  # Difference with the previous x
+                            result.append(displacement[i, j, 0] - displacement[i, j - 1, 0])
 
+                        # y-displacement
+                        if i == 0:  # First row
+                            result.append(displacement[i, j, 1])
+                        else:  # Difference with the previous y
+                            result.append(displacement[i, j, 1] - displacement[i - 1, j, 1])
+
+                x_[:, t] = np.array(result)
+            
             return np.concatenate((
                 self.nonlinearity.gk_func(x_, x_dot),
                 self.nonlinearity.gc_func(x_, x_dot)
