@@ -10,6 +10,25 @@ class excitation():
     def generate(self, time):
         return self._generate(time)
     
+class impulse(excitation):
+    '''
+    Impulse excitation
+    '''
+    
+    def __init__(self, imp_times = [0], width = 0.1, f0=0.1):
+        self.imp_times = imp_times
+        self.width = width
+        self.f0 = f0
+        
+    def _generate(self, time, seed=43810):
+        ns = time.shape[0]
+        nt_width = int(self.width/(time[1]-time[0])) // 2
+        f = np.zeros(ns)
+        imp_locs = [np.argmin(np.abs(time - imp_time)) for imp_time in self.imp_times]
+        for imp_loc in imp_locs:
+            f[imp_loc - nt_width:imp_loc + nt_width] = self.f0
+        return f
+    
 class sinusoid(excitation):
     '''
     Single sinusoidal signal with central frequency w, amplitude f0, and phase phi
