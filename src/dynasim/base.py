@@ -139,7 +139,7 @@ class mdof_system(state_space_system):
     Base class for generic mdof system
     '''
 
-    def __init__(self, M=None, C=None, K=None, Cn=None, Kn=None):
+    def __init__(self, M=None, C=None, K=None, Cn=None, Kn=None, nonlinearity=None):
 
         self.M = M
         self.C = C
@@ -147,9 +147,25 @@ class mdof_system(state_space_system):
         self.Cn = Cn
         self.Kn = Kn
         self.dofs = M.shape[0]
+        self.nonlinearity = nonlinearity
 
         self.gen_state_matrices()
         self.gen_obs_matrices()
+    
+    def nonlin_transform(self, z):
+
+        if self.nonlinearity is not None:
+
+            x_ = z[:self.dofs] - np.concatenate((np.zeros_like(z[:1]), z[:self.dofs-1]))
+            x_dot = z[self.dofs:] - np.concatenate((np.zeros_like(z[:1]), z[self.dofs:-1]))
+
+            return np.concatenate((
+                self.nonlinearity.gk_func(x_, x_dot),
+                self.nonlinearity.gc_func(x_, x_dot)
+            ))
+        
+        else:
+            return np.zeros_like(z)
 
     def simulate(self, tt, z0=None, simulator=None):
         '''
