@@ -221,7 +221,7 @@ class mdof_cantilever(mdof_system):
         if nonlinearity is not None:
             Cn = nonlinearity.Cn
             Kn = nonlinearity.Kn
-            super().__init__(M, C, K, Cn, Kn)
+            super().__init__(M, C, K, Cn, Kn, nonlinearity)
         else:
             super().__init__(M, C, K)
     
