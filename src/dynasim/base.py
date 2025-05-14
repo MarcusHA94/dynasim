@@ -143,12 +143,13 @@ class mdof_system(state_space_system):
             
             # generate acceleration observation data
             z = simulated_state_data['z']
-            if self.Bn is None:
-                acceleration = self.B @ z + self.D @ self.f
-            else:
-                acceleration = self.B @ z + self.Bn @ self.nonlin_transform(z) + self.D @ self.f
-                
-            simulated_state_data.update({'acc': acceleration})
+            if not self.simulator.__class__.__name__ == 'corotational_rk4':
+                if self.Bn is None:
+                    acceleration = self.B @ z + self.D @ self.f
+                else:
+                    acceleration = self.B @ z + self.Bn @ self.nonlin_transform(z) + self.D @ self.f
+                    
+                simulated_state_data.update({'acc': acceleration})
             
             # Final debug print to check the updated dictionary
             # print("Updated simulated_state_data:", simulated_state_data)
