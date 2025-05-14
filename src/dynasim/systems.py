@@ -2,6 +2,7 @@ import numpy as np
 from math import pi
 from dynasim.base import mdof_system, cont_ss_system
 import scipy.integrate as integrate
+import scipy
 
 class cont_beam(cont_ss_system):
 
@@ -241,9 +242,9 @@ class mdof_cantilever(mdof_system):
             return np.zeros_like(z)
         
 
-class bid_mdof_walled(mdof_system):
+class grid_uncoupled(mdof_system):
     '''
-    Generic bidirection MDOF system with walls
+    Generic bidirection MDOF system with walls and uncoupled x and y motion (i.e. linearised by assuming small angles)
     '''
     
     def __init__(self, mm, cc_h, cc_v, kk_h, kk_v, shape=None, nonlinearity=None):
@@ -379,4 +380,166 @@ class bid_mdof_walled(mdof_system):
                 
 
         return CK
+    
+class grid_corotational(mdof_system):
+    """
+    Same input signature as *grid_uncoupled* but bars are assembled
+    with a co-rotational (large-angle) stiffness & damping every step.
+    """
+
+    # ---------- constructor ----------------------------------------------
+    def __init__(self, mm, cc_h, cc_v, kk_h, kk_v,
+                 shape=None, nonlinearity=None, sparse=True):
+
+        # --------- interpret inputs exactly like grid_uncoupled -----------
+        if isinstance(mm, np.ndarray):
+            self.mm_   = mm
+            self.cc_h  = cc_h
+            self.cc_v  = cc_v
+            self.kk_h  = kk_h
+            self.kk_v  = kk_v
+            m, n       = mm.shape
+        elif shape is not None:      # scalar → fill arrays
+            m, n       = shape
+            self.mm_   = mm   * np.ones(shape)
+            self.cc_h  = cc_h * np.ones(shape)
+            self.cc_v  = cc_v * np.ones(shape)
+            self.kk_h  = kk_h * np.ones(shape)
+            self.kk_v  = kk_v * np.ones(shape)
+        else:
+            raise ValueError("Either provide full arrays or the 'shape'.")
+
+        self.shape  = (m, n)
+        self.sparse = sparse
+
+        # ---------- constant mass matrix (2 N × 2 N) ----------------------
+        M = np.diag(self.mm_.reshape(-1).repeat(2))
+
+        # ---------- build node coordinates --------------------------------
+        # (unit spacing; origin top-left, like the uncoupled code)
+        xv, yv      = np.meshgrid(np.arange(n), np.arange(m))   # shape (m,n)
+        self.node_coords = np.column_stack((xv.ravel(), yv.ravel()))
+        self.N      = self.node_coords.shape[0]                 # = m*n
+
+        # ---------- build bar list & per-bar constants --------------------
+        self.bars, self.k_e, self.c_e = self._make_bar_arrays()
+
+        # ---------- mdof_system needs *some* K,C for bookkeeping ----------
+        # pass zeros; they are never used in the co-rotational simulator
+        Z = np.zeros((2*self.N, 2*self.N))
+        super().__init__(M, Z, Z, nonlinearity=nonlinearity)
+        
+        # ---- local (2-node, 4-dof) axial bar matrices ----
+        self._k_axial = np.array([[ 1, 0, -1, 0],
+                            [ 0, 0,  0, 0],
+                            [-1, 0,  1, 0],
+                            [ 0, 0,  0, 0]], dtype=float)
+
+        self._c_axial = self._k_axial.copy()           # exactly the same pattern
+        
+        self.k_local_scaled = (self._k_axial[None,:,:] * self.k_e[:,None,None])
+        self.c_local_scaled = (self._c_axial[None,:,:] * self.c_e[:,None,None])
+
+    # ---------------------------------------------------------------------
+    def _make_bar_arrays(self):
+        """Generate connectivity arrays from kk_h/kk_v & cc_h/cc_v."""
+        bars = []
+        k_e  = []
+        c_e  = []
+        m, n = self.shape
+
+        # helper to convert (i,j) → global node index
+        node = lambda i, j: i * n + j
+
+        # -------- horizontal bars (between (i,j-1) ↔ (i,j)) --------------
+        for i in range(m):
+            for j in range(1, n):                        # skip j=0 wall entry
+                p, q = node(i, j-1), node(i, j)
+                bars.append((p, q))
+                k_e.append(self.kk_h[i, j])
+                c_e.append(self.cc_h[i, j])
+
+        # -------- vertical bars (between (i-1,j) ↔ (i,j)) ----------------
+        for i in range(1, m):                            # skip top wall row
+            for j in range(n):
+                p, q = node(i-1, j), node(i, j)
+                bars.append((p, q))
+                k_e.append(self.kk_v[i, j])
+                c_e.append(self.cc_v[i, j])
+
+        return np.asarray(bars), np.asarray(k_e), np.asarray(c_e)
+        
+    @staticmethod
+    def _rotate_local(k_local, c_local, dx, dy):
+        """
+        Return rotated (4x4) axial stiffness & damping blocks
+        given the current bar direction (dx,dy).
+        """
+        L = np.hypot(dx, dy)
+        c = dx / L
+        s = dy / L
+        T = np.array([[ c, s, 0, 0],
+                    [-s, c, 0, 0],
+                    [ 0, 0, c, s],
+                    [ 0, 0,-s, c]])
+        k_rot = T.T @ k_local @ T
+        c_rot = T.T @ c_local @ T
+        return k_rot / L, c_rot / L          #  divide by L for truss
+
+    # ---------- bar-by-bar assembly each call -------------------------------
+    def assemble_KC(self, q, v):
+        """
+        Build global K(q) and C(q) [optionally sparse] every time step.
+        q, v are (2N,) vectors of nodal displacements / velocities.
+        """
+        if self.sparse:
+            K = scipy.sparse.lil_matrix((2*self.N, 2*self.N))
+            C = scipy.sparse.lil_matrix((2*self.N, 2*self.N))
+        else:
+            K = np.zeros((2*self.N, 2*self.N))
+            C = np.zeros_like(K)
+
+        # loop over bars -----------------------------------------------------
+        for e, (p, q_) in enumerate(self.bars):
+            # global dof indices --------------------------------------------
+            idx = np.array([2*p, 2*p+1, 2*q_, 2*q_+1])
+
+            # current vector between the two nodes --------------------------
+            dx = (self.node_coords[q_,0] + q[idx[2]]     # x_q
+                  - self.node_coords[p,0] - q[idx[0]])
+            dy = (self.node_coords[q_,1] + q[idx[3]]     # y_q
+                  - self.node_coords[p,1] - q[idx[1]])
+
+            k_blk, c_blk = self._rotate_local(self.k_local_scaled[e],
+                                         self.c_local_scaled[e],
+                                         dx, dy)
+            # scatter --------------------------------------------------------
+            for a in range(4):
+                for b in range(4):
+                    K[idx[a], idx[b]] += k_blk[a, b]
+                    C[idx[a], idx[b]] += c_blk[a, b]
+        # -------------------------------------------------------------
+        #  add wall (grounded) springs & dash-pots if they are non-zero
+        # -------------------------------------------------------------
+        m, n = self.shape
+        for i in range(m):
+            p = 2 * (i * n + 0)          # node (i,0)  → left wall (x-DOF)
+            k = self.kk_h[i, 0]
+            c = self.cc_h[i, 0]
+            if k != 0.0:
+                K[p, p] += k
+            if c != 0.0:
+                C[p, p] += c
+
+        for j in range(n):
+            p = 2 * (0 * n + j) + 1      # node (0,j)  → top wall (y-DOF)
+            k = self.kk_v[0, j]
+            c = self.cc_v[0, j]
+            if k != 0.0:
+                K[p, p] += k
+            if c != 0.0:
+                C[p, p] += c
+
+        return (K.tocsr(), C.tocsr()) if self.sparse else (K, C)
+
         

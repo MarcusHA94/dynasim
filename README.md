@@ -92,7 +92,13 @@ There are a currently two system types available for MDOF systems, which are ins
 ```
 dynasim.systems.mdof_symmetric(m_, c_, k_, dofs, nonlinearity)
 dynasim.systems.mdof_cantilever(m_, c_, k_, dofs, nonlinearity)
-dynasim.systems.bid_mdof_walled(m_vec, ch_mat, cv_mat, kh_mat, kv_mat)
+```
+
+There are also two grid array mass systems, which simulate the MDOF systems with x and y directions. The displacement vectors are now $\{x_{11},y_{11},x_{12},y_{12}...,x_{mn},y_{mn}\} $, and the corresponding velocity and state vectors. These are available as coupled or uncoupled, i.e. whether the restoring force take into account relative angles between nodes as well. When using the coupled system, make sure to use the `corotational_rk4` simulator.
+
+```
+dynasim.systems.grid_uncoupled(m_vec, ch_mat, cv_mat, kh_mat, kv_mat)
+dynasim.systems.grid_corotational(m_vec, ch_mat, cv_mat, kh_mat, kv_mat)
 ```
 
 ### Actuator classes

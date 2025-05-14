@@ -85,4 +85,52 @@ class rk4(simulator):
             'xdot' : np.array(z[self.system.dofs:,:]),
             'z' : np.array(z)
         }
+        
+class corotational_rk4(rk4):
+    """
+    Same RK4 integrator but the RHS is rebuilt from K(q), C(q) every step.
+    """
+
+    def ode_f(self, t, z):
+        q = z[:self.dofs]
+        v = z[self.dofs:]
+
+        # --- large-angle K,C from the system ------------------------------
+        K, C = self.system.assemble_KC(q, v)
+
+        # --- external force at this time-point ----------------------------
+        if self.system.f is None:
+            f_ext = np.zeros(self.dofs)
+        else:
+            t_id  = np.argmin(np.abs(self.t - t))
+            f_ext = self.system.f[:, t_id]
+
+        # --- acceleration -------------------------------------------------
+        a = np.linalg.solve(self.system.M, f_ext - C @ v - K @ q)
+
+        return np.concatenate((v, a))
+
+    def sim(self, time, z0):
+        ns   = len(time)
+        dt = time[1] - time[0]
+        dofs = self.system.dofs
+        z    = np.zeros((2*dofs, ns))
+        acc  = np.zeros((dofs, ns))        # ← store a(t)
+
+        z[:, 0] = z0
+        for k in range(ns-1):
+            t = time[k]
+            k1 = self.ode_f(t,          z[:, k]);       a1 = k1[dofs:]
+            k2 = self.ode_f(t+dt/2, z[:, k] + k1*dt/2); a2 = k2[dofs:]
+            k3 = self.ode_f(t+dt/2, z[:, k] + k2*dt/2); a3 = k3[dofs:]
+            k4 = self.ode_f(t+dt,   z[:, k] + k3*dt);   a4 = k4[dofs:]
+            z[:, k+1] = z[:, k] + (dt/6)*(k1 + 2*k2 + 2*k3 + k4)
+
+            # any RK flavour: take the last stage as a(t+dt)
+            acc[:, k+1] = a4
+
+        return {'x':     z[:dofs],
+                'xdot':  z[dofs:],
+                'acc':   acc,
+                'z':     z}
     
