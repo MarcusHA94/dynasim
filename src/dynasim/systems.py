@@ -386,6 +386,9 @@ class grid_corotational(mdof_system):
     Same input signature as *grid_uncoupled* but bars are assembled
     with a co-rotational (large-angle) stiffness & damping every step.
     """
+    
+    EPS_len = 1e-9  # minimum bar length used in any 1/L
+    S_MAX = 1e12  # optional force clipping
 
     # ---------- constructor ----------------------------------------------
     def __init__(self, mm, cc_h, cc_v, kk_h, kk_v,
@@ -423,6 +426,10 @@ class grid_corotational(mdof_system):
 
         # ---------- build bar list & per-bar constants --------------------
         self.bars, self.k_e, self.c_e = self._make_bar_arrays()
+        
+        # --------- generate L0_e (rest length) from bar coordinates ---------
+        self.L0_e = np.hypot(*(self.node_coords[self.bars[:,1]] -
+                       self.node_coords[self.bars[:,0]]).T)
 
         # ---------- mdof_system needs *some* K,C for bookkeeping ----------
         # pass zeros; they are never used in the co-rotational simulator
@@ -476,6 +483,8 @@ class grid_corotational(mdof_system):
         given the current bar direction (dx,dy).
         """
         L = np.hypot(dx, dy)
+        if L < grid_corotational.EPS_len:
+            L = grid_corotational.EPS_len
         c = dx / L
         s = dy / L
         T = np.array([[ c, s, 0, 0],
@@ -484,7 +493,7 @@ class grid_corotational(mdof_system):
                     [ 0, 0,-s, c]])
         k_rot = T.T @ k_local @ T
         c_rot = T.T @ c_local @ T
-        return k_rot / L, c_rot / L          #  divide by L for truss
+        return k_rot, c_rot          #  divide by L for truss
 
     # ---------- bar-by-bar assembly each call -------------------------------
     def assemble_KC(self, q, v):
@@ -541,5 +550,77 @@ class grid_corotational(mdof_system):
                 C[p, p] += c
 
         return (K.tocsr(), C.tocsr()) if self.sparse else (K, C)
+    
+    def internal_force(self, q_disp, v_vel): # Renamed q, v for clarity within method
+        """
+        Assemble f_int(q,v) including bar forces and wall spring forces.
+        Returns f_int as a (dofs,) array.
+        """
+        f_int = np.zeros(self.dofs)
+        # C_bar_v = np.zeros_like(f_int) # Not needed if f_int contains total damping
+
+        coords = self.node_coords
+        # --- Bar forces (elastic + damping) ---
+        for e, (p_node_idx, q_node_idx) in enumerate(self.bars): # Corrected variable names
+            idx = np.array([2*p_node_idx, 2*p_node_idx+1, 2*q_node_idx, 2*q_node_idx+1])
+
+            # dx, dy are components of vector from node p to node q in current config
+            dx = (coords[q_node_idx,0] + q_disp[idx[2]]) - (coords[p_node_idx,0] + q_disp[idx[0]])
+            dy = (coords[q_node_idx,1] + q_disp[idx[3]]) - (coords[p_node_idx,1] + q_disp[idx[1]])
+            L  = np.hypot(dx, dy)
+            if L < self.EPS_len: # Use self.EPS_len consistently
+                L = self.EPS_len
+            L0 = self.L0_e[e]
+
+            dL  = L - L0
+            # Relative velocities projected onto the bar axis
+            dLt = (dx*(v_vel[idx[2]]-v_vel[idx[0]]) +
+                dy*(v_vel[idx[3]]-v_vel[idx[1]])) / L
+
+            S  = self.k_e[e]*dL + self.c_e[e]*dLt
+            S = np.clip(S, -self.S_MAX, self.S_MAX) # Use self.S_MAX
+
+            ex, ey = dx/L, dy/L
+            # Force vector in global DOFs for the element
+            F_element = S * np.array([ -ex, -ey, ex, ey ]) # Standard: -ex for node p_node_idx_x, ex for q_node_idx_x
+                                                            # Ensure your convention for F matches assembly.
+                                                            # If F is force on nodes *by* element, then for node p it's S*(-dir_vec) and for node q it's S*(dir_vec)
+                                                            # If dir_vec is (ex, ey) from p to q, then force on p is -S*(ex,ey) and force on q is S*(ex,ey).
+                                                            # So element force contribution on [px,py, qx,qy] is S*[-ex, -ey, ex, ey]
+
+            f_int[idx] += F_element # This was S * np.array([ex, ey, -ex, -ey]), check sign convention carefully.
+                                    # If F = S * [ex, ey, -ex, -ey] means force AT p is (S*ex, S*ey) and AT q is (-S*ex, -S*ey)
+                                    # This implies the vector from p to q is (-ex, -ey) for S to be positive in tension.
+                                    # Standard derivation: internal force vector for [u_p_x, u_p_y, u_q_x, u_q_y] is S * [-c, -s, c, s] where c=ex, s=ey
+
+        # --- Wall spring forces (elastic + damping) ---
+        m_shape, n_shape = self.shape
+
+        # Horizontal springs to left wall (node (i,0) x-dof)
+        # These springs are defined by self.kk_h[i,0] and self.cc_h[i,0]
+        for i in range(m_shape):
+            node_idx_global = i * n_shape + 0 # Global index of node (i,0)
+            dof_x = 2 * node_idx_global       # x-DOF for this node
+            
+            current_q_x = q_disp[dof_x]
+            current_v_x = v_vel[dof_x]
+            
+            # Force = k*q + c*v. Internal force opposes displacement/velocity.
+            # If q_x is positive (rightward displacement), spring pulls left (-k*q_x)
+            f_int[dof_x] += (self.kk_h[i, 0] * current_q_x + self.cc_h[i, 0] * current_v_x)
+
+        # Vertical springs to top wall (node (0,j) y-dof)
+        # These springs are defined by self.kk_v[0,j] and self.cc_v[0,j]
+        for j in range(n_shape):
+            node_idx_global = 0 * n_shape + j # Global index of node (0,j)
+            dof_y = 2 * node_idx_global + 1   # y-DOF for this node
+            
+            current_q_y = q_disp[dof_y]
+            current_v_y = v_vel[dof_y]
+            
+            # If q_y is positive (downward displacement), spring pulls up (-k*q_y)
+            f_int[dof_y] += (self.kk_v[0, j] * current_q_y + self.cc_v[0, j] * current_v_y)
+                
+        return f_int # Return only the total internal force vector
 
         

@@ -1,5 +1,6 @@
 import numpy as np
 import scipy
+import warnings
 
 class simulator():
 
@@ -90,13 +91,35 @@ class corotational_rk4(rk4):
     """
     Same RK4 integrator but the RHS is rebuilt from K(q), C(q) every step.
     """
+    
+    def __init__(self, system):
+        super().__init__(system)
+
+        # ③ evaluate ω_max from initial tangent and warn if dt too large
+        K0, _ = self.system.assemble_KC(np.zeros(self.dofs),
+                                        np.zeros(self.dofs))
+        # convert sparse to dense once for the eigensolver
+        K0 = K0.toarray() if scipy.sparse.issparse(K0) else K0
+        eigvals = scipy.linalg.eigvals(K0, self.system.M)
+        omega_max = np.sqrt(np.max(np.real(eigvals)))
+        dt_user   = self.system.t[1] - self.system.t[0]
+        dt_crit   = 0.2 / omega_max        # γ=0.2 safe for RK4
+
+        if dt_user > dt_crit:
+            warnings.warn(
+                f"Time-step {dt_user:.3e}s exceeds RK4 stability limit "
+                f"{dt_crit:.3e}s (ω_max={omega_max:.2f}). "
+                f"Expect divergence.", UserWarning)
+
 
     def ode_f(self, t, z):
         q = z[:self.dofs]
         v = z[self.dofs:]
+        
+        f_int = self.system.internal_force(q, v)
 
         # --- large-angle K,C from the system ------------------------------
-        K, C = self.system.assemble_KC(q, v)
+        # K, C = self.system.assemble_KC(q, v)
 
         # --- external force at this time-point ----------------------------
         if self.system.f is None:
@@ -106,7 +129,8 @@ class corotational_rk4(rk4):
             f_ext = self.system.f[:, t_id]
 
         # --- acceleration -------------------------------------------------
-        a = np.linalg.solve(self.system.M, f_ext - C @ v - K @ q)
+        a = np.linalg.solve(self.system.M, 
+                            f_ext - f_int)
 
         return np.concatenate((v, a))
 

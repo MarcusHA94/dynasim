@@ -112,51 +112,51 @@ class mdof_system(state_space_system):
             A dictionary containing the system's response displacement and velocity over time.
         '''
 
-        try:
-            # instantiate time
-            self.t = tt
+        # try:
+        # instantiate time
+        self.t = tt
 
-            if hasattr(self, 'excitations'):
-                # create shaker object
-                self.shaker = mdof_shaker(self.excitations)
-                # generate forcing series
-                self.f = self.shaker.generate(tt)
+        if hasattr(self, 'excitations'):
+            # create shaker object
+            self.shaker = mdof_shaker(self.excitations)
+            # generate forcing series
+            self.f = self.shaker.generate(tt)
+        else:
+            self.f = None
+
+        # initiate simulator
+        if simulator is None:
+            # self.simulator = scipy_ivp(self)
+            self.simulator = rk4(self)
+        else:
+            self.simulator = simulator(self)
+
+        # initial conditions
+        if z0 is None:
+            # warnings.warn('No initial conditions provided, proceeding with zero initial state', UserWarning)
+            z0 = np.zeros((2*self.dofs))
+            if all([e is None for e in self.excitations]):
+                warnings.warn('Zero initial condition and zero excitations, what do you want??', UserWarning)
+        
+        # simulate
+        simulated_state_data = self.simulator.sim(tt, z0)
+        
+        # generate acceleration observation data
+        z = simulated_state_data['z']
+        if not self.simulator.__class__.__name__ == 'corotational_rk4':
+            if self.Bn is None:
+                acceleration = self.B @ z + self.D @ self.f
             else:
-                self.f = None
-
-            # initiate simulator
-            if simulator is None:
-                # self.simulator = scipy_ivp(self)
-                self.simulator = rk4(self)
-            else:
-                self.simulator = simulator(self)
-
-            # initial conditions
-            if z0 is None:
-                warnings.warn('No initial conditions provided, proceeding with zero initial state', UserWarning)
-                z0 = np.zeros((2*self.dofs))
-                if all([e is None for e in self.excitations]):
-                    warnings.warn('Zero initial condition and zero excitations, what do you want??', UserWarning)
+                acceleration = self.B @ z + self.Bn @ self.nonlin_transform(z) + self.D @ self.f
+                
+            simulated_state_data.update({'acc': acceleration})
+        
+        # Final debug print to check the updated dictionary
+        # print("Updated simulated_state_data:", simulated_state_data)
             
-            # simulate
-            simulated_state_data = self.simulator.sim(tt, z0)
-            
-            # generate acceleration observation data
-            z = simulated_state_data['z']
-            if not self.simulator.__class__.__name__ == 'corotational_rk4':
-                if self.Bn is None:
-                    acceleration = self.B @ z + self.D @ self.f
-                else:
-                    acceleration = self.B @ z + self.Bn @ self.nonlin_transform(z) + self.D @ self.f
-                    
-                simulated_state_data.update({'acc': acceleration})
-            
-            # Final debug print to check the updated dictionary
-            # print("Updated simulated_state_data:", simulated_state_data)
-            
-        except Exception as e:
-            print("An error occurred during simulation:", e)
-            simulated_state_data = None
+        # except Exception as e:
+        #     print("An error occurred during simulation:", e)
+        #     simulated_state_data = None
             
         return simulated_state_data
 
