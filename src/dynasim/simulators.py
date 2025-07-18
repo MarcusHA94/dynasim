@@ -118,6 +118,14 @@ class corotational_rk4(rk4):
         
         f_int = self.system.internal_force(q, v)
 
+        # --- add nonlinear forces if present ---
+        if self.system.nonlinearity is not None:
+            # Get nonlinear forces from nonlin_transform
+            nonlinear_forces = self.system.nonlin_transform(z)
+            # Add the displacement-dependent nonlinear forces (first half of the result)
+            # nonlin_transform returns (2*dofs, 1) for single time step, so we need to flatten
+            f_int += nonlinear_forces[:self.dofs].flatten()
+
         # --- large-angle K,C from the system ------------------------------
         # K, C = self.system.assemble_KC(q, v)
 

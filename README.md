@@ -101,6 +101,80 @@ dynasim.systems.grid_uncoupled(m_vec, ch_mat, cv_mat, kh_mat, kv_mat)
 dynasim.systems.grid_corotational(m_vec, ch_mat, cv_mat, kh_mat, kv_mat)
 ```
 
+### Arbitrary Truss Systems
+
+For more complex truss structures with arbitrary node positions and connectivity, use the `arbitrary_truss_corotational` class. This allows you to define custom node coordinates and bar connectivity patterns:
+
+```python
+import numpy as np
+import dynasim
+
+# Define node coordinates (N nodes, each with x,y coordinates)
+node_coords = np.array([
+    [0, 0],    # Node 0
+    [1, 0],    # Node 1
+    [0.5, 1],  # Node 2
+    [1.5, 1]   # Node 3
+])
+
+# Define bar connectivity (M bars, each connecting two nodes)
+bar_connectivity = np.array([
+    [0, 1],  # Bar 0 connects nodes 0 and 1
+    [0, 2],  # Bar 1 connects nodes 0 and 2
+    [1, 2],  # Bar 2 connects nodes 1 and 2
+    [1, 3],  # Bar 3 connects nodes 1 and 3
+    [2, 3]   # Bar 4 connects nodes 2 and 3
+])
+
+# Define bar properties (one value per bar)
+bar_masses = np.array([1.0, 1.0, 1.0, 1.0, 1.0])  # Mass of each bar
+bar_stiffnesses = np.array([100.0, 100.0, 100.0, 100.0, 100.0])  # Linear stiffness
+bar_dampings = np.array([1.0, 1.0, 1.0, 1.0, 1.0])  # Damping
+bar_nonlinear_stiffnesses = np.array([10.0, 0.0, 10.0, 0.0, 10.0])  # Nonlinear stiffness
+
+# Optional: Define boundary conditions (grounded nodes)
+boundary_conditions = {
+    'nodes': [0, 1],  # Node indices to ground
+    'anchor_points': [[0, 0], [1, 0]],  # Fixed anchor points
+    'springs': [[1000.0, 10.0], [1000.0, 10.0]]  # [k, c] for each grounded node
+}
+
+# Create nonlinearity (optional)
+nonlinearity = dynasim.nonlinearities.exponent_stiffness(
+    np.ones(len(bar_connectivity)), exponent=3, dofs=len(bar_connectivity)
+)
+
+# Create the truss system
+truss = dynasim.systems.arbitrary_truss_corotational(
+    node_coords=node_coords,
+    bar_connectivity=bar_connectivity,
+    bar_masses=bar_masses,
+    bar_stiffnesses=bar_stiffnesses,
+    bar_dampings=bar_dampings,
+    bar_nonlinear_stiffnesses=bar_nonlinear_stiffnesses,
+    boundary_conditions=boundary_conditions,
+    nonlinearity=nonlinearity
+)
+
+# Add excitations (one per node DOF)
+truss.excitations = [None] * (2 * len(node_coords))  # 2 DOFs per node
+truss.excitations[4] = dynasim.actuators.sinusoid(2.0, 1.0)  # Excitation on node 2, x-direction
+
+# Simulate
+time_span = np.linspace(0, 10, 1000)
+data = truss.simulate(time_span, z0=None)
+```
+
+The `arbitrary_truss_corotational` class supports:
+- **Custom node positions**: Define any 2D node layout
+- **Flexible connectivity**: Connect nodes in any pattern
+- **Individual bar properties**: Different mass, stiffness, damping per bar
+- **Boundary conditions**: Ground nodes with spring-damper connections
+- **Nonlinearities**: Apply nonlinear forces to individual bars
+- **Co-rotational formulation**: Handles large deformations correctly
+
+Use the `corotational_rk4` simulator for this system type to handle the co-rotational formulation properly.
+
 ### Actuator classes
 
 The forcing for the system should be a list of actuations, equal in length to the number of DOFs of the system, there many actuation types,

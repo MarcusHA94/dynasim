@@ -147,5 +147,23 @@ class vanDerPol(nonlinearity):
     def gc_func(self, x, xdot):
         return (x**2 - 1) * xdot
     
+class truss_nonlinearity(nonlinearity):
+
+    def __init__(self, bar_nonlinear_stiffnesses, stiff_exponent=3, damp_exponent=0.5):
+        self.bar_nonlinear_stiffnesses = np.array(bar_nonlinear_stiffnesses)
+        self.stiff_exponent = stiff_exponent
+        self.damp_exponent = damp_exponent
+        self.n_bars = len(bar_nonlinear_stiffnesses)
     
+    def gk_func(self, elongations, rates):
+        if self.stiff_exponent == 0.0:
+            return np.zeros_like(elongations)
+        else:
+            return np.sign(elongations) * np.abs(elongations)**self.stiff_exponent
+    
+    def gc_func(self, elongations, rates):
+        if self.damp_exponent == 0.0:
+            return np.zeros_like(rates)
+        else:
+            return np.sign(rates) * np.abs(rates)**self.damp_exponent
 

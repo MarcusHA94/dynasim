@@ -401,6 +401,8 @@ class grid_corotational(mdof_system):
             self.cc_v  = cc_v
             self.kk_h  = kk_h
             self.kk_v  = kk_v
+            self.kn_h  = nonlinearity.kn_h if nonlinearity is not None else np.zeros_like(kk_h)
+            self.kn_v  = nonlinearity.kn_v if nonlinearity is not None else np.zeros_like(kk_v)
             m, n       = mm.shape
         elif shape is not None:      # scalar → fill arrays
             m, n       = shape
@@ -409,8 +411,12 @@ class grid_corotational(mdof_system):
             self.cc_v  = cc_v * np.ones(shape)
             self.kk_h  = kk_h * np.ones(shape)
             self.kk_v  = kk_v * np.ones(shape)
+            self.kn_h  = nonlinearity.kn_h if nonlinearity is not None else np.zeros(shape)
+            self.kn_v  = nonlinearity.kn_v if nonlinearity is not None else np.zeros(shape)
         else:
             raise ValueError("Either provide full arrays or the 'shape'.")
+        
+        self.nonlinearity = nonlinearity
 
         self.shape  = (m, n)
         self.sparse = sparse
@@ -425,7 +431,7 @@ class grid_corotational(mdof_system):
         self.N      = self.node_coords.shape[0]                 # = m*n
 
         # ---------- build bar list & per-bar constants --------------------
-        self.bars, self.k_e, self.c_e = self._make_bar_arrays()
+        self.bars, self.k_e, self.c_e, self.kn_e = self._make_bar_arrays()
         
         # --------- generate L0_e (rest length) from bar coordinates ---------
         self.L0_e = np.hypot(*(self.node_coords[self.bars[:,1]] -
@@ -453,6 +459,7 @@ class grid_corotational(mdof_system):
         bars = []
         k_e  = []
         c_e  = []
+        kn_e = []
         m, n = self.shape
 
         # helper to convert (i,j) → global node index
@@ -465,6 +472,7 @@ class grid_corotational(mdof_system):
                 bars.append((p, q))
                 k_e.append(self.kk_h[i, j])
                 c_e.append(self.cc_h[i, j])
+                kn_e.append(self.kn_h[i, j])
 
         # -------- vertical bars (between (i-1,j) ↔ (i,j)) ----------------
         for i in range(1, m):                            # skip top wall row
@@ -473,8 +481,9 @@ class grid_corotational(mdof_system):
                 bars.append((p, q))
                 k_e.append(self.kk_v[i, j])
                 c_e.append(self.cc_v[i, j])
+                kn_e.append(self.kn_v[i, j])
 
-        return np.asarray(bars), np.asarray(k_e), np.asarray(c_e)
+        return np.asarray(bars), np.asarray(k_e), np.asarray(c_e), np.asarray(kn_e)
         
     @staticmethod
     def _rotate_local(k_local, c_local, dx, dy):
@@ -551,9 +560,94 @@ class grid_corotational(mdof_system):
 
         return (K.tocsr(), C.tocsr()) if self.sparse else (K, C)
     
+    def nonlin_transform(self, z):
+        """
+        Transform the state vector to compute nonlinear forces for co-rotational system.
+        Computes nonlinear forces based on bar elongations and relative velocities.
+        """
+        if self.nonlinearity is not None:
+            
+            if len(z.shape) == 1:
+                z = z.reshape(-1, 1)
+            nt = z.shape[1]
+            
+            # Initialize arrays for bar elongations and rates
+            bar_elongations = np.zeros((len(self.bars), nt))
+            bar_rates = np.zeros((len(self.bars), nt))
+            
+            for t in range(nt):
+                q_disp = z[:self.dofs, t]
+                v_vel = z[self.dofs:, t]
+                
+                # Compute bar elongations and rates for each bar
+                for e, (p_node_idx, q_node_idx) in enumerate(self.bars):
+                    idx = np.array([2*p_node_idx, 2*p_node_idx+1, 2*q_node_idx, 2*q_node_idx+1])
+                    
+                    # Current bar vector
+                    dx = (self.node_coords[q_node_idx,0] + q_disp[idx[2]]) - (self.node_coords[p_node_idx,0] + q_disp[idx[0]])
+                    dy = (self.node_coords[q_node_idx,1] + q_disp[idx[3]]) - (self.node_coords[p_node_idx,1] + q_disp[idx[1]])
+                    L = np.hypot(dx, dy)
+                    if L < self.EPS_len:
+                        L = self.EPS_len
+                    
+                    # Bar elongation (difference from rest length)
+                    bar_elongations[e, t] = L - self.L0_e[e]
+                    
+                    # Bar elongation rate (projection of relative velocity onto bar axis)
+                    if L > 0:
+                        ex, ey = dx/L, dy/L
+                        bar_rates[e, t] = (ex*(v_vel[idx[2]]-v_vel[idx[0]]) + 
+                                          ey*(v_vel[idx[3]]-v_vel[idx[1]]))
+                    else:
+                        bar_rates[e, t] = 0.0
+            
+            # Apply nonlinearity to bar elongations and rates
+            nonlinear_stiffness_forces = self.nonlinearity.gk_func(bar_elongations, bar_rates)
+            nonlinear_damping_forces = self.nonlinearity.gc_func(bar_elongations, bar_rates)
+            
+            # Convert bar forces back to nodal forces
+            nodal_forces = np.zeros((self.dofs, nt))
+            
+            for t in range(nt):
+                for e, (p_node_idx, q_node_idx) in enumerate(self.bars):
+                    idx = np.array([2*p_node_idx, 2*p_node_idx+1, 2*q_node_idx, 2*q_node_idx+1])
+                    
+                    # Current bar direction
+                    q_disp = z[:self.dofs, t]
+                    dx = (self.node_coords[q_node_idx,0] + q_disp[idx[2]]) - (self.node_coords[p_node_idx,0] + q_disp[idx[0]])
+                    dy = (self.node_coords[q_node_idx,1] + q_disp[idx[3]]) - (self.node_coords[p_node_idx,1] + q_disp[idx[1]])
+                    L = np.hypot(dx, dy)
+                    if L < self.EPS_len:
+                        L = self.EPS_len
+                    
+                    if L > 0:
+                        ex, ey = dx/L, dy/L
+                        
+                        # Nonlinear stiffness force
+                        S_k = self.kn_e[e] * nonlinear_stiffness_forces[e, t]
+                        # Nonlinear damping force  
+                        S_c = self.kn_e[e] * nonlinear_damping_forces[e, t]
+                        
+                        # Total nonlinear force
+                        S = S_k + S_c
+                        S = np.clip(S, -self.S_MAX, self.S_MAX)
+                        
+                        # Distribute force to nodes
+                        F_element = S * np.array([-ex, -ey, ex, ey])
+                        nodal_forces[idx, t] += F_element
+            
+            # Return concatenated stiffness and damping forces
+            return np.concatenate((
+                nodal_forces,
+                np.zeros_like(nodal_forces)  # No velocity-dependent forces in this implementation
+            ))
+        
+        else:
+            return np.zeros_like(z)
+    
     def internal_force(self, q_disp, v_vel): # Renamed q, v for clarity within method
         """
-        Assemble f_int(q,v) including bar forces and wall spring forces.
+        Assemble f_int(q,v) including bar forces, wall spring forces, and nonlinear forces.
         Returns f_int as a (dofs,) array.
         """
         f_int = np.zeros(self.dofs)
@@ -620,7 +714,561 @@ class grid_corotational(mdof_system):
             
             # If q_y is positive (downward displacement), spring pulls up (-k*q_y)
             f_int[dof_y] += (self.kk_v[0, j] * current_q_y + self.cc_v[0, j] * current_v_y)
+        
+        # Co-rotational boundary condition forces
+        if 'nodes' in self.boundary_conditions and 'anchor_points' in self.boundary_conditions and 'springs' in self.boundary_conditions:
+            for node, anchor_point, spring_props in zip(self.boundary_conditions['nodes'], 
+                                                      self.boundary_conditions['anchor_points'],
+                                                      self.boundary_conditions['springs']):
+                if len(spring_props) >= 2:  # [k, c]
+                    k, c = spring_props[0], spring_props[1]
+                    
+                    # Current position of the node
+                    node_x = self.node_coords[node, 0] + q_disp[2*node]
+                    node_y = self.node_coords[node, 1] + q_disp[2*node+1]
+                    
+                    # Vector from anchor to current node position
+                    dx = node_x - anchor_point[0]
+                    dy = node_y - anchor_point[1]
+                    L = np.hypot(dx, dy)
+                    
+                    if L > self.EPS_len:
+                        # Unit vector in direction of spring
+                        ex, ey = dx/L, dy/L
+                        
+                        # Spring elongation (current length - rest length)
+                        # Rest length is the initial distance from anchor to node
+                        rest_length = np.hypot(self.node_coords[node, 0] - anchor_point[0],
+                                             self.node_coords[node, 1] - anchor_point[1])
+                        elongation = L - rest_length
+                        
+                        # Spring elongation rate (projection of velocity onto spring direction)
+                        elongation_rate = ex * v_vel[2*node] + ey * v_vel[2*node+1]
+                        
+                        # Total spring force
+                        spring_force = k * elongation + c * elongation_rate
+                        
+                        # Apply force in direction of spring (toward anchor point)
+                        f_int[2*node] += spring_force * (-ex)  # Force opposes displacement
+                        f_int[2*node+1] += spring_force * (-ey)
+
+        # Note: Nonlinear forces are handled by nonlin_transform method
+        # and applied by the simulator, so we don't add them here
                 
         return f_int # Return only the total internal force vector
 
+        
+class arbitrary_truss_corotational(mdof_system):
+    """
+    Co-rotational truss system with randomly distributed nodes.
+    Takes node coordinates, bar connectivity, and bar properties directly.
+    Tracks relative displacements, velocities, and accelerations from initial positions.
+    """
+    
+    EPS_len = 1e-9  # minimum bar length used in any 1/L
+    S_MAX = 1e12  # optional force clipping
+
+    def __init__(self,
+                 node_coords, 
+                 bar_connectivity, 
+                 bar_masses, 
+                 bar_stiffnesses, 
+                 bar_dampings, 
+                 bar_nonlinear_stiffnesses=None, 
+                 boundary_conditions=None,
+                 nonlinearity=None, sparse=True
+                 ):
+        """
+        Initialize random truss system.
+        
+        Args:
+            node_coords: (N, 2) array of node coordinates [x, y]
+            bar_connectivity: (M, 2) array of bar connections [node1, node2]
+            bar_masses: (M,) array of masses for each bar (distributed to nodes)
+            bar_stiffnesses: (M,) array of linear stiffness for each bar
+            bar_dampings: (M,) array of damping for each bar
+            bar_nonlinear_stiffnesses: (M,) array of nonlinear stiffness for each bar (optional)
+            boundary_conditions: dict with 'nodes', 'anchor_points', and 'springs' for grounded nodes (optional)
+                                 'nodes': list of node indices
+                                 'anchor_points': list of [x, y] coordinates for fixed anchor points
+                                 'springs': list of [k, c] spring-damper properties [stiffness, damping]
+            nonlinearity: nonlinearity object (optional)
+            sparse: whether to use sparse matrices (default: True)
+        """
+        
+        self.node_coords = np.array(node_coords)
+        self.bar_connectivity = np.array(bar_connectivity)
+        self.bar_masses = np.array(bar_masses)
+        self.bar_stiffnesses = np.array(bar_stiffnesses)
+        self.bar_dampings = np.array(bar_dampings)
+        self.bar_nonlinear_stiffnesses = (np.array(bar_nonlinear_stiffnesses) 
+                                         if bar_nonlinear_stiffnesses is not None 
+                                         else np.zeros_like(bar_stiffnesses))
+        self.boundary_conditions = boundary_conditions or {}
+        self.nonlinearity = nonlinearity
+        self.sparse = sparse
+        
+        # Number of nodes and bars
+        self.nN = self.node_coords.shape[0]  # number of nodes
+        self.nM = int(self.bar_connectivity.shape[0])  # number of bars
+        self.dofs = 2 * self.nN  # 2 DOFs per node (x, y)
+        
+        # Validate inputs
+        if self.bar_connectivity.shape[1] != 2:
+            raise ValueError("bar_connectivity must be (M, 2) array")
+        if len(self.bar_masses) != self.nM:
+            raise ValueError("bar_masses length must match number of bars")
+        if len(self.bar_stiffnesses) != self.nM:
+            raise ValueError("bar_stiffnesses length must match number of bars")
+        if len(self.bar_dampings) != self.nM:
+            raise ValueError("bar_dampings length must match number of bars")
+        if len(self.bar_nonlinear_stiffnesses) != self.nM:
+            raise ValueError("bar_nonlinear_stiffnesses length must match number of bars")
+        
+        # Check for valid node indices
+        if np.max(self.bar_connectivity) >= self.nN:
+            raise ValueError("bar_connectivity contains invalid node indices")
+        if np.min(self.bar_connectivity) < 0:
+            raise ValueError("bar_connectivity contains negative node indices")
+        
+        # Validate boundary conditions
+        if self.boundary_conditions:
+            if not all(key in self.boundary_conditions for key in ['nodes', 'anchor_points', 'springs']):
+                raise ValueError("boundary_conditions must contain 'nodes', 'anchor_points', and 'springs'")
+            if len(self.boundary_conditions['nodes']) != len(self.boundary_conditions['anchor_points']):
+                raise ValueError("Number of nodes and anchor points must match")
+            if len(self.boundary_conditions['nodes']) != len(self.boundary_conditions['springs']):
+                raise ValueError("Number of nodes and springs must match")
+        
+        # Build mass matrix by distributing bar masses to nodes
+        self._build_mass_matrix()
+        
+        # Generate rest lengths from initial bar coordinates
+        self._generate_rest_lengths()
+        
+        # Initialize base class with zero matrices (they're not used in co-rotational)
+        Z = np.zeros((self.dofs, self.dofs))
+        super().__init__(self.M_matrix, Z, Z, nonlinearity=nonlinearity)
+        
+        # Local axial bar matrices
+        self._k_axial = np.array([[ 1, 0, -1, 0],
+                                 [ 0, 0,  0, 0],
+                                 [-1, 0,  1, 0],
+                                 [ 0, 0,  0, 0]], dtype=float)
+        self._c_axial = self._k_axial.copy()
+        
+        # Scaled local matrices
+        self.k_local_scaled = (self._k_axial[None,:,:] * self.bar_stiffnesses[:,None,None])
+        self.c_local_scaled = (self._c_axial[None,:,:] * self.bar_dampings[:,None,None])
+    
+    def _build_mass_matrix(self):
+        """Build mass matrix by distributing bar masses to connected nodes."""
+        self.M_matrix = np.zeros((self.dofs, self.dofs))
+        
+        # Distribute each bar's mass equally to its two nodes
+        for i, (node1, node2) in enumerate(self.bar_connectivity):
+            mass_per_node = self.bar_masses[i] / 2.0
+            
+            # Add mass to node1 (x and y DOFs)
+            self.M_matrix[2*node1, 2*node1] += mass_per_node
+            self.M_matrix[2*node1+1, 2*node1+1] += mass_per_node
+            
+            # Add mass to node2 (x and y DOFs)
+            self.M_matrix[2*node2, 2*node2] += mass_per_node
+            self.M_matrix[2*node2+1, 2*node2+1] += mass_per_node
+    
+    def _generate_rest_lengths(self):
+        """Generate rest lengths for all bars from initial coordinates."""
+        self.rest_lengths = np.zeros(self.nM)
+        
+        for i, (node1, node2) in enumerate(self.bar_connectivity):
+            dx = self.node_coords[node2, 0] - self.node_coords[node1, 0]
+            dy = self.node_coords[node2, 1] - self.node_coords[node1, 1]
+            self.rest_lengths[i] = np.hypot(dx, dy)
+    
+    @staticmethod
+    def _rotate_local(k_local, c_local, dx, dy):
+        """
+        Return rotated (4x4) axial stiffness & damping blocks
+        given the current bar direction (dx,dy).
+        """
+        L = np.hypot(dx, dy)
+        if L < arbitrary_truss_corotational.EPS_len:
+            L = arbitrary_truss_corotational.EPS_len
+        c = dx / L
+        s = dy / L
+        T = np.array([[ c, s, 0, 0],
+                     [-s, c, 0, 0],
+                     [ 0, 0, c, s],
+                     [ 0, 0,-s, c]])
+        k_rot = T.T @ k_local @ T
+        c_rot = T.T @ c_local @ T
+        return k_rot, c_rot
+    
+    def assemble_KC(self, q, v):
+        """
+        Build global K(q) and C(q) [optionally sparse] every time step.
+        q, v are (2N,) vectors of nodal displacements / velocities.
+        """
+        if self.sparse:
+            K = scipy.sparse.lil_matrix((self.dofs, self.dofs))
+            C = scipy.sparse.lil_matrix((self.dofs, self.dofs))
+        else:
+            K = np.zeros((self.dofs, self.dofs))
+            C = np.zeros_like(K)
+
+        # Loop over bars
+        for e, (node1, node2) in enumerate(self.bar_connectivity):
+            # Global DOF indices
+            idx = np.array([2*node1, 2*node1+1, 2*node2, 2*node2+1])
+
+            # Current vector between the two nodes
+            dx = (self.node_coords[node2, 0] + q[idx[2]] - 
+                  self.node_coords[node1, 0] - q[idx[0]])
+            dy = (self.node_coords[node2, 1] + q[idx[3]] - 
+                  self.node_coords[node1, 1] - q[idx[1]])
+
+            k_blk, c_blk = self._rotate_local(self.k_local_scaled[e],
+                                            self.c_local_scaled[e],
+                                            dx, dy)
+            
+            # Scatter to global matrices
+            for a in range(4):
+                for b in range(4):
+                    K[idx[a], idx[b]] += k_blk[a, b]
+                    C[idx[a], idx[b]] += c_blk[a, b]
+        
+        # Add co-rotational boundary condition springs
+        if 'nodes' in self.boundary_conditions and 'anchor_points' in self.boundary_conditions and 'springs' in self.boundary_conditions:
+            for node, anchor_point, spring_props in zip(self.boundary_conditions['nodes'], 
+                                                      self.boundary_conditions['anchor_points'],
+                                                      self.boundary_conditions['springs']):
+                if len(spring_props) >= 2:  # [k, c]
+                    k, c = spring_props[0], spring_props[1]
+                    
+                    # Current position of the node
+                    node_x = self.node_coords[node, 0] + q[2*node]
+                    node_y = self.node_coords[node, 1] + q[2*node+1]
+                    
+                    # Vector from anchor to current node position
+                    dx = node_x - anchor_point[0]
+                    dy = node_y - anchor_point[1]
+                    L = np.hypot(dx, dy)
+                    
+                    if L > self.EPS_len:
+                        # Unit vector in direction of spring
+                        ex, ey = dx/L, dy/L
+                        
+                        # Co-rotational spring stiffness matrix (2x2 for single node)
+                        # This is the derivative of the spring force with respect to node position
+                        k_spring = k * np.array([[ex*ex, ex*ey],
+                                               [ey*ex, ey*ey]])
+                        
+                        # Co-rotational damping matrix
+                        c_spring = c * np.array([[ex*ex, ex*ey],
+                                               [ey*ex, ey*ey]])
+                        
+                        # Add to global matrices
+                        node_idx = 2*node
+                        K[node_idx:node_idx+2, node_idx:node_idx+2] += k_spring
+                        C[node_idx:node_idx+2, node_idx:node_idx+2] += c_spring
+
+        return (K.tocsr(), C.tocsr()) if self.sparse else (K, C)
+    
+    def nonlin_transform(self, z):
+        """
+        Transform the state vector to compute nonlinear forces for co-rotational system.
+        Computes nonlinear forces based on bar elongations and relative velocities.
+        """
+        if self.nonlinearity is not None:
+            
+            if len(z.shape) == 1:
+                z = z.reshape(-1, 1)
+            nt = z.shape[1]
+            
+            # Initialize arrays for bar elongations and rates
+            bar_elongations = np.zeros((self.nM, nt))
+            bar_rates = np.zeros((self.nM, nt))
+            
+            for t in range(nt):
+                q_disp = z[:self.dofs, t]
+                v_vel = z[self.dofs:, t]
+                
+                # Compute bar elongations and rates for each bar
+                for e, (node1, node2) in enumerate(self.bar_connectivity):
+                    idx = np.array([2*node1, 2*node1+1, 2*node2, 2*node2+1])
+                    
+                    # Current bar vector
+                    dx = (self.node_coords[node2, 0] + q_disp[idx[2]] - 
+                          self.node_coords[node1, 0] - q_disp[idx[0]])
+                    dy = (self.node_coords[node2, 1] + q_disp[idx[3]] - 
+                          self.node_coords[node1, 1] - q_disp[idx[1]])
+                    L = np.hypot(dx, dy)
+                    if L < self.EPS_len:
+                        L = self.EPS_len
+                    
+                    # Bar elongation (difference from rest length)
+                    bar_elongations[e, t] = L - self.rest_lengths[e]
+                    
+                    # Bar elongation rate (projection of relative velocity onto bar axis)
+                    if L > 0:
+                        ex, ey = dx/L, dy/L
+                        bar_rates[e, t] = (ex*(v_vel[idx[2]]-v_vel[idx[0]]) + 
+                                          ey*(v_vel[idx[3]]-v_vel[idx[1]]))
+                    else:
+                        bar_rates[e, t] = 0.0
+            
+            # Apply nonlinearity to bar elongations and rates
+            nonlinear_stiffness_forces = self.nonlinearity.gk_func(bar_elongations, bar_rates)
+            nonlinear_damping_forces = self.nonlinearity.gc_func(bar_elongations, bar_rates)
+            
+            # Convert bar forces back to nodal forces
+            nodal_forces = np.zeros((self.dofs, nt))
+            
+            for t in range(nt):
+                for e, (node1, node2) in enumerate(self.bar_connectivity):
+                    idx = np.array([2*node1, 2*node1+1, 2*node2, 2*node2+1])
+                    
+                    # Current bar direction
+                    q_disp = z[:self.dofs, t]
+                    dx = (self.node_coords[node2, 0] + q_disp[idx[2]] - 
+                          self.node_coords[node1, 0] - q_disp[idx[0]])
+                    dy = (self.node_coords[node2, 1] + q_disp[idx[3]] - 
+                          self.node_coords[node1, 1] - q_disp[idx[1]])
+                    L = np.hypot(dx, dy)
+                    if L < self.EPS_len:
+                        L = self.EPS_len
+                    
+                    if L > 0:
+                        ex, ey = dx/L, dy/L
+                        
+                        # Nonlinear stiffness force
+                        S_k = self.bar_nonlinear_stiffnesses[e] * nonlinear_stiffness_forces[e, t]
+                        # Nonlinear damping force  
+                        S_c = self.bar_nonlinear_stiffnesses[e] * nonlinear_damping_forces[e, t]
+                        
+                        # Total nonlinear force
+                        S = S_k + S_c
+                        S = np.clip(S, -self.S_MAX, self.S_MAX)
+                        
+                        # Distribute force to nodes
+                        F_element = S * np.array([-ex, -ey, ex, ey])
+                        nodal_forces[idx, t] += F_element
+            
+            # Return concatenated stiffness and damping forces
+            return np.concatenate((
+                nodal_forces,
+                np.zeros_like(nodal_forces)  # No velocity-dependent forces in this implementation
+            ))
+        
+        else:
+            return np.zeros_like(z)
+    
+    def internal_force(self, q_disp, v_vel):
+        """
+        Assemble f_int(q,v) including bar forces, boundary condition forces, and nonlinear forces.
+        Returns f_int as a (dofs,) array.
+        """
+        f_int = np.zeros(self.dofs)
+
+        # Bar forces (elastic + damping)
+        for e, (node1, node2) in enumerate(self.bar_connectivity):
+            idx = np.array([2*node1, 2*node1+1, 2*node2, 2*node2+1])
+
+            # Current bar vector
+            dx = (self.node_coords[node2, 0] + q_disp[idx[2]] - 
+                  self.node_coords[node1, 0] - q_disp[idx[0]])
+            dy = (self.node_coords[node2, 1] + q_disp[idx[3]] - 
+                  self.node_coords[node1, 1] - q_disp[idx[1]])
+            L = np.hypot(dx, dy)
+            if L < self.EPS_len:
+                L = self.EPS_len
+            L0 = self.rest_lengths[e]
+
+            # Bar elongation and rate
+            dL = L - L0
+            if L > 0:
+                ex, ey = dx/L, dy/L
+                dLt = (ex*(v_vel[idx[2]]-v_vel[idx[0]]) + 
+                       ey*(v_vel[idx[3]]-v_vel[idx[1]]))
+            else:
+                dLt = 0.0
+
+            # Linear force
+            S = self.bar_stiffnesses[e] * dL + self.bar_dampings[e] * dLt
+            S = np.clip(S, -self.S_MAX, self.S_MAX)
+
+            # Distribute force to nodes
+            if L > 0:
+                F_element = S * np.array([-ex, -ey, ex, ey])
+                f_int[idx] += F_element
+
+        # Boundary condition forces
+        if 'nodes' in self.boundary_conditions and 'springs' in self.boundary_conditions:
+            for node, springs in zip(self.boundary_conditions['nodes'], 
+                                   self.boundary_conditions['springs']):
+                if len(springs) >= 2:  # [kx, ky, cx, cy]
+                    # X-direction spring
+                    if springs[0] != 0.0:
+                        f_int[2*node] += springs[0] * q_disp[2*node]
+                    if len(springs) > 2 and springs[2] != 0.0:
+                        f_int[2*node] += springs[2] * v_vel[2*node]
+                    
+                    # Y-direction spring
+                    if springs[1] != 0.0:
+                        f_int[2*node+1] += springs[1] * q_disp[2*node+1]
+                    if len(springs) > 3 and springs[3] != 0.0:
+                        f_int[2*node+1] += springs[3] * v_vel[2*node+1]
+        
+        # Note: Nonlinear forces are handled by nonlin_transform method
+        # and applied by the simulator, so we don't add them here
+                
+        return f_int
+    
+    def get_relative_kinematics(self, q_disp, v_vel, a_acc=None):
+        """
+        Get relative kinematics (displacement, velocity, acceleration) from initial positions.
+        
+        Args:
+            q_disp: (2N,) displacement vector
+            v_vel: (2N,) velocity vector
+            a_acc: (2N,) acceleration vector (optional)
+            
+        Returns:
+            dict with 'positions', 'velocities', 'accelerations' (if provided)
+        """
+        # Current positions = initial positions + displacements
+        current_positions = self.node_coords + q_disp.reshape(-1, 2)
+        
+        # Velocities are already relative (no initial velocity)
+        current_velocities = v_vel.reshape(-1, 2)
+        
+        result = {
+            'positions': current_positions,
+            'velocities': current_velocities
+        }
+        
+        if a_acc is not None:
+            current_accelerations = a_acc.reshape(-1, 2)
+            result['accelerations'] = current_accelerations
+            
+        return result
+    
+    def get_bar_kinematics(self, q_disp, v_vel, a_acc=None):
+        """
+        Get bar-level kinematics (elongations, rates, accelerations).
+        
+        Args:
+            q_disp: (2N,) displacement vector
+            v_vel: (2N,) velocity vector
+            a_acc: (2N,) acceleration vector (optional)
+            
+        Returns:
+            dict with 'elongations', 'rates', 'accelerations' (if provided)
+        """
+        elongations = np.zeros(int(self.nM))
+        rates = np.zeros(int(self.nM))
+        
+        for e, (node1, node2) in enumerate(self.bar_connectivity):
+            idx = np.array([2*node1, 2*node1+1, 2*node2, 2*node2+1])
+            
+            # Current bar vector
+            dx = (self.node_coords[node2, 0] + q_disp[idx[2]] - 
+                  self.node_coords[node1, 0] - q_disp[idx[0]])
+            dy = (self.node_coords[node2, 1] + q_disp[idx[3]] - 
+                  self.node_coords[node1, 1] - q_disp[idx[1]])
+            L = np.hypot(dx, dy)
+            if L < self.EPS_len:
+                L = self.EPS_len
+            
+            # Elongation
+            elongations[e] = L - self.rest_lengths[e]
+            
+            # Rate
+            if L > 0:
+                ex, ey = dx/L, dy/L
+                rates[e] = (ex*(v_vel[idx[2]]-v_vel[idx[0]]) + 
+                           ey*(v_vel[idx[3]]-v_vel[idx[1]]))
+        
+        result = {
+            'elongations': elongations,
+            'rates': rates
+        }
+        
+        if a_acc is not None:
+            accelerations = np.zeros(int(self.nM))
+            for e, (node1, node2) in enumerate(self.bar_connectivity):
+                idx = np.array([2*node1, 2*node1+1, 2*node2, 2*node2+1])
+                
+                # Current bar vector
+                dx = (self.node_coords[node2, 0] + q_disp[idx[2]] - 
+                      self.node_coords[node1, 0] - q_disp[idx[0]])
+                dy = (self.node_coords[node2, 1] + q_disp[idx[3]] - 
+                      self.node_coords[node1, 1] - q_disp[idx[1]])
+                L = np.hypot(dx, dy)
+                if L < self.EPS_len:
+                    L = self.EPS_len
+                
+                # Acceleration
+                if L > 0:
+                    ex, ey = dx/L, dy/L
+                    accelerations[e] = (ex*(a_acc[idx[2]]-a_acc[idx[0]]) + 
+                                       ey*(a_acc[idx[3]]-a_acc[idx[1]]))
+            
+            result['accelerations'] = accelerations
+            
+        return result
+
+   
+   
+def find_nearest_neighbors(coords, k=3, min_connections=2):
+    """Find k nearest neighbors for each node, ensuring minimum connectivity."""
+    from scipy.spatial.distance import cdist
+    
+    distances = cdist(coords, coords)
+    np.fill_diagonal(distances, np.inf)  # Exclude self
+    
+    connections = []
+    node_connection_count = np.zeros(len(coords), dtype=int)
+    
+    # First pass: connect each node to its k nearest neighbors
+    for i in range(len(coords)):
+        nearest = np.argsort(distances[i])[:k]
+        for j in nearest:
+            if i < j:  # Avoid duplicate connections
+                connections.append([i, j])
+                node_connection_count[i] += 1
+                node_connection_count[j] += 1
+    
+    # Second pass: ensure minimum connectivity
+    for i in range(len(coords)):
+        while node_connection_count[i] < min_connections:
+            # Find the closest unconnected node
+            available_nodes = []
+            for j in range(len(coords)):
+                if i != j and node_connection_count[j] < k:  # Don't exceed k connections
+                    # Check if connection already exists
+                    connection_exists = False
+                    for conn in connections:
+                        if (conn[0] == i and conn[1] == j) or (conn[0] == j and conn[1] == i):
+                            connection_exists = True
+                            break
+                    
+                    if not connection_exists:
+                        available_nodes.append((j, distances[i, j]))
+            
+            if available_nodes:
+                # Sort by distance and take the closest
+                available_nodes.sort(key=lambda x: x[1])
+                j = available_nodes[0][0]
+                
+                # Add connection
+                connections.append([min(i, j), max(i, j)])
+                node_connection_count[i] += 1
+                node_connection_count[j] += 1
+            else:
+                # No available nodes, break to avoid infinite loop
+                break
+    
+    return connections
         
