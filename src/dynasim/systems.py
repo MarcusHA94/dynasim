@@ -1121,23 +1121,34 @@ class arbitrary_truss_corotational(mdof_system):
                 f_int[idx] += F_element
 
         # Boundary condition forces
-        if 'nodes' in self.boundary_conditions and 'springs' in self.boundary_conditions and 'anchor_points' in self.boundary_conditions:
-            for i, (node, springs) in enumerate(zip(self.boundary_conditions['nodes'], self.boundary_conditions['springs'])):
-                anchor_x, anchor_y = self.boundary_conditions['anchor_points'][i]
-                # Current node position
-                node_x = self.node_coords[node, 0] + q_disp[2*node]
-                node_y = self.node_coords[node, 1] + q_disp[2*node+1]
-                # X-direction spring
-                if springs[0] != 0.0:
-                    f_int[2*node] += springs[0] * (node_x - anchor_x)
-                if len(springs) > 2 and springs[2] != 0.0:
-                    f_int[2*node] += springs[2] * v_vel[2*node]
-                # Y-direction spring
-                if springs[1] != 0.0:
-                    f_int[2*node+1] += springs[1] * (node_y - anchor_y)
-                if len(springs) > 3 and springs[3] != 0.0:
-                    f_int[2*node+1] += springs[3] * v_vel[2*node+1]
-        
+        if 'nodes' in self.boundary_conditions and 'anchor_points' in self.boundary_conditions and 'springs' in self.boundary_conditions:
+            for node, anchor_point, spring_props in zip(self.boundary_conditions['nodes'], 
+                                                      self.boundary_conditions['anchor_points'],
+                                                      self.boundary_conditions['springs']):
+                if len(spring_props) >= 2:  # [k, c]
+                    k, c = spring_props[0], spring_props[1]
+                    # Current position of the node
+                    node_x = self.node_coords[node, 0] + q_disp[2*node]
+                    node_y = self.node_coords[node, 1] + q_disp[2*node+1]
+                    # Vector from anchor to current node position
+                    dx = node_x - anchor_point[0]
+                    dy = node_y - anchor_point[1]
+                    L = np.hypot(dx, dy)
+                    if L > self.EPS_len:
+                        # Unit vector in direction of spring
+                        ex, ey = dx/L, dy/L
+                        # Spring elongation (current length - rest length)
+                        rest_length = np.hypot(self.node_coords[node, 0] - anchor_point[0],
+                                               self.node_coords[node, 1] - anchor_point[1])
+                        elongation = L - rest_length
+                        # Spring elongation rate (projection of velocity onto spring direction)
+                        elongation_rate = ex * v_vel[2*node] + ey * v_vel[2*node+1]
+                        # Total spring force
+                        spring_force = k * elongation + c * elongation_rate
+                        # Apply force in direction of spring (toward anchor point)
+                        f_int[2*node] += spring_force * (-ex)
+                        f_int[2*node+1] += spring_force * (-ey)
+
         # Note: Nonlinear forces are handled by nonlin_transform method
         # and applied by the simulator, so we don't add them here
                 
@@ -1240,16 +1251,8 @@ class arbitrary_truss_corotational(mdof_system):
     def get_internal_forces(self, z):
         """
         Returns a tuple (linear_forces, nonlinear_forces) for the current state z.
-        Both are arrays of shape (dofs,).
-        Linear forces are computed using internal_force.
-        Nonlinear forces are computed using nonlin_transform (first dofs entries).
-        Args:
-            z: State vector of shape (2*dofs,) or (2*dofs, nt)
-        Returns:
-            linear_forces: (dofs,) or (dofs, nt)
-            nonlinear_forces: (dofs,) or (dofs, nt)
+        Both are arrays of shape (dofs,) or (dofs, nt) depending on z.
         """
-        linear_forces = np.zeros((self.dofs, z.shape[1]))
         if z.ndim == 1:
             q_disp = z[:self.dofs]
             v_vel = z[self.dofs:]
