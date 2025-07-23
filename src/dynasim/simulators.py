@@ -166,3 +166,45 @@ class corotational_rk4(rk4):
                 'acc':   acc,
                 'z':     z}
     
+class SymplecticEuler(simulator):
+    """
+    Symplectic Euler integrator for Hamiltonian systems (e.g., trusses).
+    Updates velocity first, then position.
+    """
+    def __init__(self, system):
+        super().__init__(system)
+        self.system = system
+
+    def sim(self, time, z0):
+        ns = len(time)
+        dt = time[1] - time[0]
+        dofs = self.system.dofs
+        z = np.zeros((2*dofs, ns))
+        acc = np.zeros((dofs, ns))
+        z[:, 0] = z0
+        q = z0[:dofs].copy()
+        v = z0[dofs:].copy()
+        for k in range(ns-1):
+            t = time[k]
+            # Compute acceleration at current state
+            f_int = self.system.internal_force(q, v)
+            if self.system.nonlinearity is not None:
+                nonlinear_forces = self.system.nonlin_transform(np.concatenate((q, v)))
+                f_int += nonlinear_forces[:dofs].flatten()
+            if self.system.f is None:
+                f_ext = np.zeros(dofs)
+            else:
+                t_id = np.argmin(np.abs(self.t - t))
+                f_ext = self.system.f[:, t_id]
+            a = np.linalg.solve(self.system.M, f_ext - f_int)
+            # Symplectic Euler: update v, then q
+            v = v + dt * a
+            q = q + dt * v
+            z[:dofs, k+1] = q
+            z[dofs:, k+1] = v
+            acc[:, k+1] = a
+        return {'x': z[:dofs],
+                'xdot': z[dofs:],
+                'acc': acc,
+                'z': z}
+    
