@@ -1032,10 +1032,8 @@ class arbitrary_truss_corotational(mdof_system):
                     
                     # Current bar direction
                     q_disp = z[:self.dofs, t]
-                    dx = (self.node_coords[node2, 0] + q_disp[idx[2]] - 
-                          self.node_coords[node1, 0] - q_disp[idx[0]])
-                    dy = (self.node_coords[node2, 1] + q_disp[idx[3]] - 
-                          self.node_coords[node1, 1] - q_disp[idx[1]])
+                    dx = (self.node_coords[node2, 0] + q_disp[idx[2]]) - (self.node_coords[node1, 0] + q_disp[idx[0]])
+                    dy = (self.node_coords[node2, 1] + q_disp[idx[3]]) - (self.node_coords[node1, 1] + q_disp[idx[1]])
                     L = np.hypot(dx, dy)
                     if L < self.EPS_len:
                         L = self.EPS_len
@@ -1054,6 +1052,7 @@ class arbitrary_truss_corotational(mdof_system):
                         
                         # Distribute force to nodes
                         F_element = S * np.array([-ex, -ey, ex, ey])
+                        # F_element = S * np.array([ex, ey, -ex, -ey])
                         nodal_forces[idx, t] += F_element
             
             # Return concatenated stiffness and damping forces
@@ -1115,9 +1114,16 @@ class arbitrary_truss_corotational(mdof_system):
             if q_disp.ndim == 1:
                 if L > 0:
                     F_element = S * np.array([-ex, -ey, ex, ey])
+                    # F_element = S * np.array([ex, ey, -ex, -ey])
+                    # Debug print for all bars
+                    # print(f"Bar {e}: dL={dL:.3e}, dLt={dLt:.3e}, S={S:.3e}, F_element={F_element}")
                     f_int[idx] += F_element
             else:
                 F_element = S * np.array([-ex, -ey, ex, ey])
+                # F_element = S * np.array([ex, ey, -ex, -ey])
+                # Debug print for all bars, first time step
+                # if F_element.shape[-1] > 0:
+                    # print(f"Bar {e}: dL={dL[0]:.3e}, dLt={dLt[0]:.3e}, S={S[0]:.3e}, F_element={F_element[:,0]:.3e}")
                 f_int[idx] += F_element
 
         # Boundary condition forces
@@ -1127,27 +1133,61 @@ class arbitrary_truss_corotational(mdof_system):
                                                       self.boundary_conditions['springs']):
                 if len(spring_props) >= 2:  # [k, c]
                     k, c = spring_props[0], spring_props[1]
-                    # Current position of the node
-                    node_x = self.node_coords[node, 0] + q_disp[2*node]
-                    node_y = self.node_coords[node, 1] + q_disp[2*node+1]
-                    # Vector from anchor to current node position
-                    dx = node_x - anchor_point[0]
-                    dy = node_y - anchor_point[1]
-                    L = np.hypot(dx, dy)
-                    if L > self.EPS_len:
-                        # Unit vector in direction of spring
-                        ex, ey = dx/L, dy/L
-                        # Spring elongation (current length - rest length)
+                    if q_disp.ndim == 1:
+                        
+                        # Linear spring and damper in x and y (not co-rotational)
+                        # f_int[2*node:2*node+2] = -k * q_disp[2*node:2*node+2] - c * v_vel[2*node:2*node+2]
+                        
+                        # disp_x = (self.node_coords[node, 0] + q_disp[2*node]) - anchor_point[0]
+                        # disp_y = (self.node_coords[node, 1] + q_disp[2*node+1]) - anchor_point[1]
+                        # vel_x = v_vel[2*node]
+                        # vel_y = v_vel[2*node+1]
+                        # f_int[2*node]   += -k * disp_x - c * vel_x
+                        # f_int[2*node+1] += -k * disp_y - c * vel_y
+                        
+                        # Co-rotational spring and damper
+                        node_x = self.node_coords[node, 0] + q_disp[2*node]
+                        node_y = self.node_coords[node, 1] + q_disp[2*node+1]
+                        dx = node_x - anchor_point[0]
+                        dy = node_y - anchor_point[1]
+                        L = np.hypot(dx, dy)
+                        if L > self.EPS_len:
+                            ex, ey = dx/L, dy/L
+                            rest_length = np.hypot(self.node_coords[node, 0] - anchor_point[0],
+                                                   self.node_coords[node, 1] - anchor_point[1])
+                            elongation = L - rest_length
+                            elongation_rate = ex * v_vel[2*node] + ey * v_vel[2*node+1]
+                            spring_force = k * elongation + c * elongation_rate
+                            # Debug print for boundary spring
+                            # print(f"Boundary spring: node={node}, elongation={elongation:.3e}, elongation_rate={elongation_rate:.3e}, spring_force={spring_force:.3e}, ex={ex:.3e}, ey={ey:.3e}")
+                            f_int[2*node] += spring_force * (ex)
+                            f_int[2*node+1] += spring_force * (ey)
+                    else:
+                        
+                        # Linear spring and damper in x and y (not co-rotational)
+                        # f_int[2*node:2*node+2] = -k * q_disp[2*node:2*node+2] - c * v_vel[2*node:2*node+2]
+                        
+                        # Co-rotational spring and damper
+                        # q_disp, v_vel are (dofs, nt)
+                        node_x = self.node_coords[node, 0] + q_disp[2*node, :]
+                        node_y = self.node_coords[node, 1] + q_disp[2*node+1, :]
+                        dx = node_x - anchor_point[0]
+                        dy = node_y - anchor_point[1]
+                        L = np.hypot(dx, dy)
+                        mask = L > self.EPS_len
+                        ex = np.zeros_like(L)
+                        ey = np.zeros_like(L)
+                        ex[mask] = dx[mask]/L[mask]
+                        ey[mask] = dy[mask]/L[mask]
                         rest_length = np.hypot(self.node_coords[node, 0] - anchor_point[0],
                                                self.node_coords[node, 1] - anchor_point[1])
                         elongation = L - rest_length
-                        # Spring elongation rate (projection of velocity onto spring direction)
-                        elongation_rate = ex * v_vel[2*node] + ey * v_vel[2*node+1]
-                        # Total spring force
+                        elongation_rate = ex * v_vel[2*node, :] + ey * v_vel[2*node+1, :]
                         spring_force = k * elongation + c * elongation_rate
-                        # Apply force in direction of spring (toward anchor point)
-                        f_int[2*node] += spring_force * (-ex)
-                        f_int[2*node+1] += spring_force * (-ey)
+                        # Debug print for boundary spring (first time step)
+                        # print(f"Boundary spring: node={node}, elongation={elongation[0]:.3e}, elongation_rate={elongation_rate[0]:.3e}, spring_force={spring_force[0]:.3e}, ex={ex[0]:.3e}, ey={ey[0]:.3e}")
+                        f_int[2*node, :] += spring_force * (ex)
+                        f_int[2*node+1, :] += spring_force * (ey)
 
         # Note: Nonlinear forces are handled by nonlin_transform method
         # and applied by the simulator, so we don't add them here
