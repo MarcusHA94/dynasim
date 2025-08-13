@@ -133,7 +133,13 @@ class corotational_rk4(rk4):
         if self.system.f is None:
             f_ext = np.zeros(self.dofs)
         else:
-            t_id  = np.argmin(np.abs(self.t - t))
+            # t_id  = np.argmin(np.abs(self.t - t))
+            # f_ext = self.system.f[:, t_id]
+            
+            # zero-order hold for external force
+            dt = self.t[1] - self.t[0]
+            t_id = int(np.floor(t / dt))
+            t_id = min(t_id, self.system.f.shape[1] - 1)
             f_ext = self.system.f[:, t_id]
 
         # --- acceleration -------------------------------------------------

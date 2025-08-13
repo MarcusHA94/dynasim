@@ -80,7 +80,8 @@ class banded_noise(excitation):
 
     def _generate(self, time, seed=43810):
         np.random.seed(seed)
-        return self.amplitude * self.band_limited_noise(self.bandwidth[0], self.bandwidth[1], samples=len(time), samplerate=1/(time[1]-time[0]))
+        dt = time[1] - time[0]
+        return self.amplitude / dt * self.band_limited_noise(self.bandwidth[0], self.bandwidth[1], samples=len(time), samplerate=1/dt)
     
 class sine_sweep(excitation):
     '''
