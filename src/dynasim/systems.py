@@ -846,7 +846,7 @@ class arbitrary_truss_corotational(mdof_system):
         self._build_mass_matrix()
         
         # Generate rest lengths from initial bar coordinates
-        self._generate_rest_lengths()
+        self._generate_rest_lengths_and_angles()
         
         # Initialize base class with zero matrices (they're not used in co-rotational)
         Z = np.zeros((self.dofs, self.dofs))
@@ -879,14 +879,16 @@ class arbitrary_truss_corotational(mdof_system):
             self.M_matrix[2*node2, 2*node2] += mass_per_node
             self.M_matrix[2*node2+1, 2*node2+1] += mass_per_node
     
-    def _generate_rest_lengths(self):
+    def _generate_rest_lengths_and_angles(self):
         """Generate rest lengths for all bars from initial coordinates."""
         self.rest_lengths = np.zeros(self.nM)
+        self.rest_angles = np.zeros(self.nM)
         
         for i, (node1, node2) in enumerate(self.bar_connectivity):
             dx = self.node_coords[node2, 0] - self.node_coords[node1, 0]
             dy = self.node_coords[node2, 1] - self.node_coords[node1, 1]
             self.rest_lengths[i] = np.hypot(dx, dy)
+            self.rest_angles[i] = np.arctan2(dy, dx)
     
     @staticmethod
     def _rotate_local(k_local, c_local, dx, dy):
@@ -991,7 +993,7 @@ class arbitrary_truss_corotational(mdof_system):
             # Initialize arrays for bar elongations and rates
             bar_elongations = np.zeros((self.nM, nt))
             bar_rates = np.zeros((self.nM, nt))
-            bar_angles = np.zeros((self.nM, nt))
+            bar_angle_deviations = np.zeros((self.nM, nt))
             
             for t in range(nt):
                 q_disp = z[:self.dofs, t]
@@ -1022,11 +1024,11 @@ class arbitrary_truss_corotational(mdof_system):
                         bar_rates[e, t] = 0.0
                     
                     # Bar angle
-                    bar_angles[e, t] = np.arctan2(dy, dx)
+                    bar_angle_deviations[e, t] = np.arctan2(dy, dx) - self.rest_angles[e]
             
             # Apply nonlinearity to bar elongations and rates
-            nonlinear_stiffness_forces = self.nonlinearity.gk_func(bar_elongations, bar_rates, bar_angles)
-            nonlinear_damping_forces = self.nonlinearity.gc_func(bar_elongations, bar_rates, bar_angles)
+            nonlinear_stiffness_forces = self.nonlinearity.gk_func(bar_elongations, bar_rates, bar_angle_deviations)
+            nonlinear_damping_forces = self.nonlinearity.gc_func(bar_elongations, bar_rates, bar_angle_deviations)
             
             # Convert bar forces back to nodal forces
             nodal_forces = np.zeros((self.dofs, nt))

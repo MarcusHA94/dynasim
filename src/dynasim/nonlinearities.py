@@ -209,7 +209,7 @@ class pdelta_truss_nonlinearity(nonlinearity):
                         # Apply P-delta effect proportional to the vertical load
                         self.bar_nonlinear_stiffnesses[i] = vertical_loads[node_idx]
     
-    def gk_func(self, elongations, rates, angles):
+    def gk_func(self, elongations, rates, angle_deviation):
         """
         Compute nonlinear stiffness contribution based on bar elongations.
         
@@ -227,7 +227,7 @@ class pdelta_truss_nonlinearity(nonlinearity):
             # This is approximated through the bar elongations
             return elongations  # Linear relationship for P-delta
     
-    def gc_func(self, elongations, rates, angles):
+    def gc_func(self, elongations, rates, angle_deviation):
         """
         Compute nonlinear damping contribution.
         P-delta typically doesn't affect damping directly.
@@ -257,7 +257,7 @@ class expansion_joint_nonlinearity(nonlinearity):
         self.angles_gap_sizes = angles_gap_sizes
         self.bar_nonlinear_stiffnesses = expansion_stiffnesses
     
-    def gk_func(self, elongations, rates, angles):
+    def gk_func(self, elongations, rates, angle_deviation):
         """
         Compute nonlinear stiffness contribution based on bar elongations.
         
@@ -268,9 +268,9 @@ class expansion_joint_nonlinearity(nonlinearity):
         Returns:
             Nonlinear force contribution
         """
-        return (angles >= self.angles_gap_sizes) * self.bar_nonlinear_stiffnesses * (angles - self.angles_gap_sizes)
+        return (np.abs(angle_deviation) >= self.angles_gap_sizes) * self.bar_nonlinear_stiffnesses * (np.abs(angle_deviation) - self.angles_gap_sizes)
     
-    def gc_func(self, elongations, rates, angles):
+    def gc_func(self, elongations, rates, angle_deviation):
         """
         Compute nonlinear damping contribution.
         P-delta typically doesn't affect damping directly.
