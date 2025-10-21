@@ -991,6 +991,7 @@ class arbitrary_truss_corotational(mdof_system):
             # Initialize arrays for bar elongations and rates
             bar_elongations = np.zeros((self.nM, nt))
             bar_rates = np.zeros((self.nM, nt))
+            bar_angles = np.zeros((self.nM, nt))
             
             for t in range(nt):
                 q_disp = z[:self.dofs, t]
@@ -1019,10 +1020,13 @@ class arbitrary_truss_corotational(mdof_system):
                                           ey*(v_vel[idx[3]]-v_vel[idx[1]]))
                     else:
                         bar_rates[e, t] = 0.0
+                    
+                    # Bar angle
+                    bar_angles[e, t] = np.arctan2(dy, dx)
             
             # Apply nonlinearity to bar elongations and rates
-            nonlinear_stiffness_forces = self.nonlinearity.gk_func(bar_elongations, bar_rates)
-            nonlinear_damping_forces = self.nonlinearity.gc_func(bar_elongations, bar_rates)
+            nonlinear_stiffness_forces = self.nonlinearity.gk_func(bar_elongations, bar_rates, bar_angles)
+            nonlinear_damping_forces = self.nonlinearity.gc_func(bar_elongations, bar_rates, bar_angles)
             
             # Convert bar forces back to nodal forces
             nodal_forces = np.zeros((self.dofs, nt))
@@ -1752,4 +1756,13 @@ def create_delaunay_connections(coords):
 
     # 3. Convert the set of tuples back to a list of lists
     return [list(edge) for edge in edges]
-        
+
+def create_bridge_truss_nodes(level_height, dist_between_nodes, num_lower_nodes):
+    
+    nodes = []
+    for i in range(num_lower_nodes):
+        nodes.append([i * dist_between_nodes, 0.0])
+    for i in range(num_lower_nodes - 1):
+        nodes.append([(i + 0.5) * dist_between_nodes, level_height])
+    return np.array(nodes)
+    

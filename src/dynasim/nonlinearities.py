@@ -155,15 +155,132 @@ class truss_nonlinearity(nonlinearity):
         self.damp_exponent = damp_exponent
         self.n_bars = len(bar_nonlinear_stiffnesses)
     
-    def gk_func(self, elongations, rates):
+    def gk_func(self, elongations, rates, angles):
         if self.stiff_exponent == 0.0:
             return np.zeros_like(elongations)
         else:
             return np.sign(elongations) * np.abs(elongations)**self.stiff_exponent
     
-    def gc_func(self, elongations, rates):
+    def gc_func(self, elongations, rates, angles):
         if self.damp_exponent == 0.0:
             return np.zeros_like(rates)
         else:
             return np.sign(rates) * np.abs(rates)**self.damp_exponent
+        
+class pdelta_truss_nonlinearity(nonlinearity):
+    """
+    Nonlinearity class for P-delta effects in truss-based frame models.
+    """
+    
+    def __init__(self, node_coords, bar_connectivity, vertical_loads, stiff_exponent=1.0):
+        """
+        Initialize P-delta nonlinearity for truss-based frame.
+        
+        Args:
+            node_coords: Node coordinates array (N, 2)
+            bar_connectivity: Bar connectivity array (M, 2)
+            vertical_loads: Dictionary mapping node indices to vertical loads
+            stiff_exponent: Exponent for nonlinear relationship (default: 1.0)
+        """
+        self.node_coords = node_coords
+        self.bar_connectivity = bar_connectivity
+        self.vertical_loads = vertical_loads
+        self.stiff_exponent = stiff_exponent
+        self.n_nodes = len(node_coords)
+        self.n_bars = len(bar_connectivity)
+        
+        # Total DOFs: 2 per node (x, y)
+        dofs = 2 * self.n_nodes
+        super().__init__(dofs)
+        
+        # Create bar nonlinear stiffness array
+        self.bar_nonlinear_stiffnesses = np.zeros(self.n_bars)
+        
+        # Identify vertical bars (columns) - approximation based on orientation
+        for i, (node1, node2) in enumerate(bar_connectivity):
+            dx = node_coords[node2, 0] - node_coords[node1, 0]
+            dy = node_coords[node2, 1] - node_coords[node1, 1]
+            
+            # If bar is primarily vertical (column)
+            if abs(dy) > abs(dx):
+                # Find if any of the nodes has a vertical load
+                for node_idx in [node1, node2]:
+                    if node_idx in vertical_loads:
+                        # Apply P-delta effect proportional to the vertical load
+                        self.bar_nonlinear_stiffnesses[i] = vertical_loads[node_idx]
+    
+    def gk_func(self, elongations, rates, angles):
+        """
+        Compute nonlinear stiffness contribution based on bar elongations.
+        
+        Args:
+            elongations: Bar elongations array
+            rates: Bar elongation rates array
+            
+        Returns:
+            Nonlinear force contribution
+        """
+        if self.stiff_exponent == 0.0:
+            return np.zeros_like(elongations)
+        else:
+            # For P-delta, we want the effect to be proportional to lateral displacement
+            # This is approximated through the bar elongations
+            return elongations  # Linear relationship for P-delta
+    
+    def gc_func(self, elongations, rates, angles):
+        """
+        Compute nonlinear damping contribution.
+        P-delta typically doesn't affect damping directly.
+        
+        Args:
+            elongations: Bar elongations array
+            rates: Bar elongation rates array
+            
+        Returns:
+            Zero vector (no nonlinear damping from P-delta)
+        """
+        return np.zeros_like(rates)
+    
+class expansion_joint_nonlinearity(nonlinearity):
+    """
+    Nonlinearity class for expansion joint effects in truss-based frame models.
+    """
+    
+    def __init__(self, angles_gap_sizes, expansion_stiffnesses):
+        """
+        Initialize expansion joint nonlinearity for truss-based frame.
+        
+        Args:
+            gap_size: Gap size
+            expansion_stiffness: Expansion stiffness
+        """
+        self.angles_gap_sizes = angles_gap_sizes
+        self.bar_nonlinear_stiffnesses = expansion_stiffnesses
+    
+    def gk_func(self, elongations, rates, angles):
+        """
+        Compute nonlinear stiffness contribution based on bar elongations.
+        
+        Args:
+            elongations: Bar elongations array
+            rates: Bar elongation rates array
+            
+        Returns:
+            Nonlinear force contribution
+        """
+        return (angles >= self.angles_gap_sizes) * self.bar_nonlinear_stiffnesses * (angles - self.angles_gap_sizes)
+    
+    def gc_func(self, elongations, rates, angles):
+        """
+        Compute nonlinear damping contribution.
+        P-delta typically doesn't affect damping directly.
+        
+        Args:
+            elongations: Bar elongations array
+            rates: Bar elongation rates array
+            
+        Returns:
+            Zero vector (no nonlinear damping from P-delta)
+        """
+        return np.zeros_like(rates)
 

@@ -143,7 +143,7 @@ class mdof_system(state_space_system):
         
         # generate acceleration observation data
         z = simulated_state_data['z']
-        if self.simulator.__class__.__name__ not in ['corotational_rk4', 'SymplecticEuler']:
+        if self.simulator.__class__.__name__ in ['rk4', 'scipy_ivp']:
             if self.Bn is None:
                 acceleration = self.B @ z + self.D @ self.f
             else:
