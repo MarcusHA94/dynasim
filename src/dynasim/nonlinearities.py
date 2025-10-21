@@ -254,8 +254,9 @@ class expansion_joint_nonlinearity(nonlinearity):
             gap_size: Gap size
             expansion_stiffness: Expansion stiffness
         """
-        self.angles_gap_sizes = angles_gap_sizes
-        self.bar_nonlinear_stiffnesses = expansion_stiffnesses
+        self.angles_gap_sizes = angles_gap_sizes.reshape(-1, 1)
+        self.bar_nonlinear_stiffnesses = expansion_stiffnesses.reshape(-1, 1)
+        self.output_type = 'moment'
     
     def gk_func(self, elongations, rates, angle_deviation):
         """
@@ -268,7 +269,16 @@ class expansion_joint_nonlinearity(nonlinearity):
         Returns:
             Nonlinear force contribution
         """
-        return (np.abs(angle_deviation) >= self.angles_gap_sizes) * self.bar_nonlinear_stiffnesses * (np.abs(angle_deviation) - self.angles_gap_sizes)
+        
+        moments = np.zeros_like(angle_deviation)
+        active_mask = np.abs(angle_deviation) >= self.angles_gap_sizes
+        
+        if np.any(active_mask):
+            moments[active_mask] = self.bar_nonlinear_stiffnesses[active_mask] * (
+                np.abs(angle_deviation[active_mask]) - self.angles_gap_sizes[active_mask]
+                ) * np.sign(angle_deviation[active_mask])
+        
+        return moments
     
     def gc_func(self, elongations, rates, angle_deviation):
         """

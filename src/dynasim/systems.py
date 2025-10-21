@@ -1,6 +1,7 @@
 import numpy as np
 from math import pi
 from dynasim.base import mdof_system, cont_ss_system
+from dynasim import nonlinearities
 import scipy.integrate as integrate
 import scipy
 from scipy.integrate import cumulative_trapezoid
@@ -1048,19 +1049,32 @@ class arbitrary_truss_corotational(mdof_system):
                     if L > 0:
                         ex, ey = dx/L, dy/L
                         
-                        # Nonlinear stiffness force
-                        S_k = self.bar_nonlinear_stiffnesses[e] * nonlinear_stiffness_forces[e, t]
-                        # Nonlinear damping force  
-                        S_c = self.bar_nonlinear_stiffnesses[e] * nonlinear_damping_forces[e, t]
-                        
-                        # Total nonlinear force
-                        S = S_k + S_c
-                        S = np.clip(S, -self.S_MAX, self.S_MAX)
-                        
-                        # Distribute force to nodes
-                        F_element = S * np.array([-ex, -ey, ex, ey])
-                        # F_element = S * np.array([ex, ey, -ex, -ey])
-                        nodal_forces[idx, t] += F_element
+                        if self.nonlinearity.output_type == 'moment':
+                            
+                            px, py = -ey, ex
+                            # convert the moment output to perpendicular forces
+                            moment = nonlinear_stiffness_forces[e, t]
+                            
+                            if moment != 0.0:
+                                force_magnitude = moment / L
+                                F_element = force_magnitude * np.array([px, py, -px, -py])
+                                nodal_forces[idx, t] += F_element
+                            
+                        else:
+                            
+                            # Nonlinear stiffness force
+                            S_k = self.bar_nonlinear_stiffnesses[e] * nonlinear_stiffness_forces[e, t]
+                            # Nonlinear damping force  
+                            S_c = self.bar_nonlinear_stiffnesses[e] * nonlinear_damping_forces[e, t]
+                            
+                            # Total nonlinear force
+                            S = S_k + S_c
+                            S = np.clip(S, -self.S_MAX, self.S_MAX)
+                            
+                            # Distribute force to nodes
+                            F_element = S * np.array([-ex, -ey, ex, ey])
+                            # F_element = S * np.array([ex, ey, -ex, -ey])
+                            nodal_forces[idx, t] += F_element
             
             # Return concatenated stiffness and damping forces
             return np.concatenate((
