@@ -167,5 +167,90 @@ class point_shakers():
                     self.f[self.loc_id, :] = self.excitation
         return self.f
         
+class ground_acceleration():
+    '''
+    Ground acceleration actuator class.
+    Generates effective force signals F = -M * a_g for a system.
+    Assumes DOFs are arranged as [x1, y1, x2, y2, ...] for 2D systems.
+    '''
 
+    def __init__(self, system, x_acc=None, y_acc=None, z_acc=None, seed=43810):
+        self.system = system
+        self.x_acc = x_acc
+        self.y_acc = y_acc
+        self.z_acc = z_acc
+        self.seed = seed
+
+    def generate(self, time):
+        nt = time.shape[0]
+        dofs = self.system.dofs
+        
+        # Initialize acceleration vectors
+        ax = np.zeros(nt)
+        ay = np.zeros(nt)
+        
+        # Process x acceleration
+        match self.x_acc:
+            case excitation():
+                ax = self.x_acc._generate(time, self.seed)
+            case np.ndarray():
+                ax = np.asarray(self.x_acc).flatten()
+                if len(ax) != nt:
+                    raise ValueError(f"x_acc array length {len(ax)} does not match time length {nt}")
+            case None:
+                pass
+                
+        # Process y acceleration
+        match self.y_acc:
+            case excitation():
+                ay = self.y_acc._generate(time, self.seed+1)
+            case np.ndarray():
+                ay = np.asarray(self.y_acc).flatten()
+                if len(ay) != nt:
+                    raise ValueError(f"y_acc array length {len(ay)} does not match time length {nt}")
+            case None:
+                pass
+                
+        # Ensure ax and ay are 1D arrays of length nt
+        ax = np.asarray(ax).flatten()
+        ay = np.asarray(ay).flatten()
+        
+        if len(ax) != nt:
+            raise ValueError(f"x_acc length {len(ax)} does not match time length {nt}")
+        if len(ay) != nt:
+            raise ValueError(f"y_acc length {len(ay)} does not match time length {nt}")
+                
+        # Construct global ground acceleration vector
+        ag = np.zeros((dofs, nt))
+        
+        # Assign to interleaved DOFs
+        # Assuming 2D system (x, y)
+        # Apply x to all x-DOFs (indices 0, 2, 4...)
+        if dofs % 2 == 0:
+            # Broadcast ax and ay to all x and y DOFs respectively
+            # ax is (nt,), ag[0::2, :] is (num_x_dofs, nt) - numpy will broadcast correctly
+            ag[0::2, :] = ax  # Broadcasts to all x-DOFs
+            ag[1::2, :] = ay  # Broadcasts to all y-DOFs
+        else:
+            # For odd number of DOFs, assume first is x, rest alternate
+            ag[0, :] = ax
+            if dofs > 1:
+                ag[1::2, :] = ay  # Broadcasts to remaining y-DOFs
+        
+        # Calculate effective force F = -M * ag
+        # Try to get mass matrix from system
+        if hasattr(self.system, 'M'):
+            M = self.system.M
+        elif hasattr(self.system, 'M_matrix'):
+            M = self.system.M_matrix
+        else:
+            raise AttributeError("System does not have mass matrix attribute 'M' or 'M_matrix'")
+        
+        # Handle sparse mass matrices if present
+        if scipy.sparse.issparse(M):
+            f_eff = -M.dot(ag)
+        else:
+            f_eff = -M @ ag
+            
+        return f_eff
 

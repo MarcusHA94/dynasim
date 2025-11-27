@@ -115,8 +115,11 @@ class mdof_system(state_space_system):
         # try:
         # instantiate time
         self.t = tt
+        
+        if hasattr(self, 'actuator'):
+            self.f = self.actuator.generate(tt)
 
-        if hasattr(self, 'excitations'):
+        elif hasattr(self, 'excitations'):
             # create shaker object
             self.shaker = mdof_shaker(self.excitations)
             # generate forcing series
@@ -135,7 +138,7 @@ class mdof_system(state_space_system):
         if z0 is None:
             # warnings.warn('No initial conditions provided, proceeding with zero initial state', UserWarning)
             z0 = np.zeros((2*self.dofs))
-            if all([e is None for e in self.excitations]):
+            if hasattr(self, 'excitations') and all([e is None for e in self.excitations]):
                 warnings.warn('Zero initial condition and zero excitations, what do you want??', UserWarning)
         
         # simulate

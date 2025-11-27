@@ -2,7 +2,7 @@
 init.py
 '''
 
-__version__ = '0.2.1.0'
+__version__ = '0.2.1.1'
 
 import dynasim.actuators as actuators
 import dynasim.nonlinearities as nonlinearities

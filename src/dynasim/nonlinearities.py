@@ -154,6 +154,7 @@ class truss_nonlinearity(nonlinearity):
         self.stiff_exponent = stiff_exponent
         self.damp_exponent = damp_exponent
         self.n_bars = len(bar_nonlinear_stiffnesses)
+        self.output_type = 'force'
     
     def gk_func(self, elongations, rates, angles):
         if self.stiff_exponent == 0.0:
@@ -188,7 +189,7 @@ class pdelta_truss_nonlinearity(nonlinearity):
         self.stiff_exponent = stiff_exponent
         self.n_nodes = len(node_coords)
         self.n_bars = len(bar_connectivity)
-        
+        self.output_type = 'force'
         # Total DOFs: 2 per node (x, y)
         dofs = 2 * self.n_nodes
         super().__init__(dofs)
@@ -293,4 +294,138 @@ class expansion_joint_nonlinearity(nonlinearity):
             Zero vector (no nonlinear damping from P-delta)
         """
         return np.zeros_like(rates)
+    
+
+class hysteretic_angular_nonlinearity(nonlinearity):
+    """
+    Nonlinearity class for hysteretic angular effects in truss-based frame models.
+    
+    This class implements a bilinear hysteresis model with the following features:
+    - Different stiffnesses for loading and unloading phases
+    - Tracking of historical maximum deformation
+    - Energy dissipation through the hysteresis loop
+    """
+    
+    def __init__(self, angles_gap_sizes, loading_stiffnesses, unloading_stiffnesses, yield_angles=None):
+        """
+        Initialize hysteretic angular nonlinearity for truss-based frame.
+        
+        Args:
+            angles_gap_sizes: Gap sizes before nonlinearity activates (radians)
+            loading_stiffnesses: Stiffness coefficients during initial loading
+            unloading_stiffnesses: Stiffness coefficients during unloading (typically higher)
+            yield_angles: Angles at which yielding occurs (if None, uses 3*angles_gap_sizes)
+        """
+        self.angles_gap_sizes = angles_gap_sizes.reshape(-1, 1)
+        self.loading_stiffnesses = loading_stiffnesses.reshape(-1, 1)
+        self.unloading_stiffnesses = unloading_stiffnesses.reshape(-1, 1)
+        
+        if yield_angles is None:
+            self.yield_angles = 3.0 * self.angles_gap_sizes
+        else:
+            self.yield_angles = yield_angles.reshape(-1, 1)
+            
+        # Initialize history variables
+        self.max_positive_angles = np.zeros_like(self.angles_gap_sizes)
+        self.max_negative_angles = np.zeros_like(self.angles_gap_sizes)
+        self.prev_angle_deviation = None
+        self.output_type = 'moment'
+    
+    def gk_func(self, elongations, rates, angle_deviation):
+        """
+        Compute nonlinear stiffness contribution based on angular deviations.
+        
+        Args:
+            elongations: Bar elongations array
+            rates: Bar elongation rates array
+            angle_deviation: Angular deviations array
+            
+        Returns:
+            Nonlinear moment contribution
+        """
+        # Initialize moments array
+        moments = np.zeros_like(angle_deviation)
+        
+        # First-time initialization of previous angle
+        if self.prev_angle_deviation is None:
+            self.prev_angle_deviation = np.zeros_like(angle_deviation)
+        
+        # Determine direction of motion (loading vs unloading)
+        angle_rates = angle_deviation - self.prev_angle_deviation
+        
+        # Process each element in the array
+        for i in range(angle_deviation.shape[0]):
+            for j in range(angle_deviation.shape[1]):
+                angle = angle_deviation[i, j]
+                rate = angle_rates[i, j]
+                
+                # Skip if within gap
+                if abs(angle) < self.angles_gap_sizes[i, 0]:
+                    continue
+                
+                # Positive angle domain
+                if angle > 0:
+                    # Update maximum positive angle if needed
+                    if angle > self.max_positive_angles[i, 0]:
+                        self.max_positive_angles[i, 0] = angle
+                        # Loading phase - use loading stiffness
+                        moments[i, j] = self.loading_stiffnesses[i, 0] * (angle - self.angles_gap_sizes[i, 0])
+                    else:
+                        # Unloading phase - use unloading stiffness
+                        # Calculate reference point for unloading path
+                        if angle > self.yield_angles[i, 0]:
+                            # If beyond yield, use plastic unloading
+                            reference = self.yield_angles[i, 0] + (self.max_positive_angles[i, 0] - self.yield_angles[i, 0]) * 0.5
+                            moments[i, j] = self.unloading_stiffnesses[i, 0] * (angle - reference)
+                        else:
+                            # Elastic unloading
+                            moments[i, j] = self.unloading_stiffnesses[i, 0] * (angle - self.angles_gap_sizes[i, 0])
+                
+                # Negative angle domain
+                else:
+                    # Update maximum negative angle if needed
+                    if angle < self.max_negative_angles[i, 0]:
+                        self.max_negative_angles[i, 0] = angle
+                        # Loading phase - use loading stiffness
+                        moments[i, j] = self.loading_stiffnesses[i, 0] * (angle + self.angles_gap_sizes[i, 0])
+                    else:
+                        # Unloading phase - use unloading stiffness
+                        # Calculate reference point for unloading path
+                        if angle < -self.yield_angles[i, 0]:
+                            # If beyond yield, use plastic unloading
+                            reference = -self.yield_angles[i, 0] + (self.max_negative_angles[i, 0] + self.yield_angles[i, 0]) * 0.5
+                            moments[i, j] = self.unloading_stiffnesses[i, 0] * (angle - reference)
+                        else:
+                            # Elastic unloading
+                            moments[i, j] = self.unloading_stiffnesses[i, 0] * (angle + self.angles_gap_sizes[i, 0])
+        
+        # Store current angle for next time step
+        self.prev_angle_deviation = angle_deviation.copy()
+        
+        return moments
+    
+    def gc_func(self, elongations, rates, angle_deviation):
+        """
+        Compute nonlinear damping contribution.
+        In hysteretic models, energy dissipation is handled through the hysteresis loop,
+        so we typically don't need additional velocity-dependent damping.
+        
+        Args:
+            elongations: Bar elongations array
+            rates: Bar elongation rates array
+            angle_deviation: Angular deviations array
+            
+        Returns:
+            Zero vector (no additional nonlinear damping)
+        """
+        return np.zeros_like(rates)
+    
+    def reset_history(self):
+        """
+        Reset the history variables to initial state.
+        Useful when running multiple simulations.
+        """
+        self.max_positive_angles = np.zeros_like(self.angles_gap_sizes)
+        self.max_negative_angles = np.zeros_like(self.angles_gap_sizes)
+        self.prev_angle_deviation = None
 
